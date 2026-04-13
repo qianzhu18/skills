@@ -11,7 +11,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowRightLeft,
-  ArrowUpRight,
   Blocks,
   Bot,
   CheckCircle2,
@@ -20,16 +19,17 @@ import {
   FileCode2,
   FileJson2,
   Files,
-  FolderCog,
   GitBranch,
-  LayoutPanelTop,
-  LibraryBig,
-  Plus,
+  LayoutDashboard,
+  Layers3,
+  Link2,
+  Moon,
+  PackageSearch,
+  Radar,
   RefreshCw,
-  Save,
   Search,
   Trash2,
-  Upload,
+  X,
 } from "lucide-react";
 
 import { ActionButton } from "@/components/action-button";
@@ -37,10 +37,8 @@ import type {
   ActionResponse,
   CatalogSkill,
   DashboardData,
-  InstallationState,
   LibrarySummary,
   SkillDetail,
-  SkillHubConfig,
   WorkspaceSkill,
 } from "@/lib/skillhub-types";
 
@@ -48,20 +46,35 @@ type SkillStoreAppProps = {
   initialData: DashboardData;
 };
 
-type SectionMode = "library" | "catalog" | "sync" | "settings";
-
-type Section = {
-  key: string;
-  label: string;
-  mode: SectionMode;
-  description: string;
-};
-
-type PreviewTab = "overview" | "skill" | "readme" | "files" | "package" | "manifest";
-
-type SkillFilter = "all" | "needs-action" | "changed" | "missing" | "synced";
-
+type ActiveView = "skills" | "similar" | "dashboard" | "sync" | "trash";
+type ScopeFilter = "all" | "local" | "catalog";
+type StatusFilter = "all" | "local" | "agents" | "pending" | "changed" | "synced";
+type GroupBy = "library" | "source" | "flat";
+type DetailTab = "overview" | "skill" | "readme" | "files" | "package" | "manifest";
 type SyncLocationState = "mirrored" | "synced" | "drift" | "local-only" | "missing";
+
+type StoreSkill = {
+  record: WorkspaceSkill | CatalogSkill;
+  key: string;
+  id: string;
+  name: string;
+  description: string;
+  shortDescription: string;
+  sourceId: string;
+  sourceLabel: string;
+  agentLabel: string;
+  agentIcon: string;
+  sourceBadge: string;
+  scopeLabel: string;
+  statusLabel: string;
+  statusTone: "good" | "warn" | "plain" | "soft";
+  locationType: "library" | "catalog";
+  homepage?: string;
+  updatedAt: string;
+  fileCount: number;
+  sizeBytes: number;
+  hash: string;
+};
 
 type SyncMatrixCell = {
   locationId: string;
@@ -80,23 +93,6 @@ type SyncMatrixRow = {
   locations: SyncMatrixCell[];
 };
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value));
-}
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 function formatBytes(bytes: number) {
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -109,25 +105,161 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function matchesSearch(
-  query: string,
-  skill: WorkspaceSkill | CatalogSkill,
-  extraValues: string[] = [],
-) {
+function statusClass(tone: StoreSkill["statusTone"]) {
+  if (tone === "good") {
+    return "hub-badge-good";
+  }
+
+  if (tone === "warn") {
+    return "hub-badge-warn";
+  }
+
+  if (tone === "soft") {
+    return "hub-badge-soft";
+  }
+
+  return "hub-badge-plain";
+}
+
+function workspaceStatus(skill: WorkspaceSkill) {
+  if (skill.catalogStatus === "synced") {
+    return { label: "已同步", tone: "good" as const };
+  }
+
+  if (skill.catalogStatus === "changed") {
+    return { label: "有更新", tone: "warn" as const };
+  }
+
+  return { label: "待备份", tone: "plain" as const };
+}
+
+function getAgentMeta(sourceId: string) {
+  if (sourceId === "claude") {
+    return { icon: "🤖", label: "Claude Code" };
+  }
+
+  if (sourceId === "codex") {
+    return { icon: "◼", label: "Codex" };
+  }
+
+  if (sourceId === "agents") {
+    return { icon: "🌐", label: "Universal" };
+  }
+
+  if (sourceId === "catalog") {
+    return { icon: "☁", label: "Cloud Mirror" };
+  }
+
+  return { icon: "📦", label: sourceId };
+}
+
+function buildStoreSkills(data: DashboardData): StoreSkill[] {
+  const localSkills = data.workspaceSkills.map((skill) => {
+    const agent = getAgentMeta(skill.sourceId);
+    const status = workspaceStatus(skill);
+
+    return {
+      record: skill,
+      key: `${skill.sourceId}:${skill.id}:${skill.path}`,
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      shortDescription: skill.shortDescription,
+      sourceId: skill.sourceId,
+      sourceLabel: skill.sourceLabel,
+      agentLabel: agent.label,
+      agentIcon: agent.icon,
+      sourceBadge: "local",
+      scopeLabel: "全局",
+      statusLabel: status.label,
+      statusTone: status.tone,
+      locationType: "library" as const,
+      homepage: skill.homepage,
+      updatedAt: skill.updatedAt,
+      fileCount: skill.fileCount,
+      sizeBytes: skill.sizeBytes,
+      hash: skill.hash,
+    };
+  });
+
+  const catalogSkills = data.catalogSkills.map((skill) => {
+    const hasUpdates = skill.installations.some(
+      (installation) => installation.status === "update-available",
+    );
+    const hasMissing = skill.installations.some(
+      (installation) => installation.status === "missing",
+    );
+    const statusLabel = hasUpdates ? "可更新" : hasMissing ? "待安装" : "已安装";
+    const statusTone: StoreSkill["statusTone"] = hasUpdates
+      ? "warn"
+      : hasMissing
+        ? "plain"
+        : "good";
+
+    return {
+      record: skill,
+      key: `catalog:${skill.id}:${skill.path}`,
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      shortDescription: skill.shortDescription,
+      sourceId: "catalog",
+      sourceLabel: skill.sourceLabel,
+      agentLabel: "Cloud Mirror",
+      agentIcon: "☁",
+      sourceBadge: "agents",
+      scopeLabel: "云端",
+      statusLabel,
+      statusTone,
+      locationType: "catalog" as const,
+      homepage: skill.homepage,
+      updatedAt: skill.updatedAt,
+      fileCount: skill.fileCount,
+      sizeBytes: skill.sizeBytes,
+      hash: skill.hash,
+    };
+  });
+
+  return [...localSkills, ...catalogSkills].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+function buildDuplicateGroups(skills: StoreSkill[]) {
+  const byName = new Map<string, StoreSkill[]>();
+
+  for (const skill of skills) {
+    const key = skill.id.toLowerCase();
+    byName.set(key, [...(byName.get(key) ?? []), skill]);
+  }
+
+  return Array.from(byName.entries())
+    .filter(([, group]) => group.length > 1)
+    .map(([id, group]) => ({
+      id,
+      label: group[0]?.name ?? id,
+      skills: group,
+    }))
+    .sort((left, right) => right.skills.length - left.skills.length);
+}
+
+function matchesSearch(query: string, skill: StoreSkill) {
   if (!query) {
     return true;
   }
 
+  const record = skill.record;
   const haystack = [
     skill.id,
     skill.name,
     skill.description,
     skill.sourceLabel,
-    skill.version,
-    ...skill.commands,
-    ...skill.triggers,
-    ...skill.tags,
-    ...extraValues,
+    skill.agentLabel,
+    skill.statusLabel,
+    record.version,
+    ...record.commands,
+    ...record.triggers,
+    ...record.tags,
   ]
     .filter(Boolean)
     .join(" ")
@@ -136,64 +268,16 @@ function matchesSearch(
   return haystack.includes(query);
 }
 
-function workspaceStatusLabel(status: WorkspaceSkill["catalogStatus"]) {
-  if (status === "missing") {
-    return "云端缺失";
-  }
-
-  if (status === "changed") {
-    return "存在差异";
-  }
-
-  return "云端一致";
-}
-
-function installationStatusLabel(status: InstallationState) {
-  if (status === "missing") {
-    return "未安装";
-  }
-
-  if (status === "update-available") {
-    return "可更新";
-  }
-
-  return "已安装";
-}
-
-function workspaceStatusTone(status: WorkspaceSkill["catalogStatus"]) {
-  if (status === "synced") {
-    return "status-pill-good";
-  }
-
-  if (status === "changed") {
-    return "status-pill-warn";
-  }
-
-  return "status-pill-plain";
-}
-
-function installationStatusTone(status: InstallationState) {
-  if (status === "installed") {
-    return "status-pill-good";
-  }
-
-  if (status === "update-available") {
-    return "status-pill-warn";
-  }
-
-  return "status-pill-plain";
-}
-
 function syncRowTone(status: SyncMatrixRow["status"]) {
   if (status === "aligned") {
-    return "status-pill-good";
+    return "hub-badge-good";
   }
 
   if (status === "partial") {
-    return "status-pill-subtle";
+    return "hub-badge-soft";
   }
 
-  return "status-pill-warn";
+  return "hub-badge-warn";
 }
 
 function syncRowLabel(status: SyncMatrixRow["status"]) {
@@ -210,7 +294,7 @@ function syncRowLabel(status: SyncMatrixRow["status"]) {
   }
 
   if (status === "mirror-missing") {
-    return "未同步到云端";
+    return "未备份";
   }
 
   return "存在差异";
@@ -218,18 +302,18 @@ function syncRowLabel(status: SyncMatrixRow["status"]) {
 
 function syncCellTone(state: SyncLocationState) {
   if (state === "synced" || state === "mirrored") {
-    return "status-pill-good";
+    return "hub-badge-good";
   }
 
   if (state === "drift") {
-    return "status-pill-warn";
+    return "hub-badge-warn";
   }
 
   if (state === "local-only") {
-    return "status-pill-subtle";
+    return "hub-badge-soft";
   }
 
-  return "status-pill-plain";
+  return "hub-badge-plain";
 }
 
 function syncCellLabel(state: SyncLocationState) {
@@ -250,184 +334,6 @@ function syncCellLabel(state: SyncLocationState) {
   }
 
   return "缺失";
-}
-
-function sectionBadge(section: Section, data: DashboardData) {
-  if (section.mode === "library") {
-    return data.librarySummaries.find((library) => library.id === section.key)
-      ?.skillCount;
-  }
-
-  if (section.key === "catalog") {
-    return data.summary.catalogSkills;
-  }
-
-  if (section.key === "sync") {
-    return data.summary.pendingImports + data.summary.pendingInstalls;
-  }
-
-  return undefined;
-}
-
-function skillMatchesFilter(
-  filter: SkillFilter,
-  skill: WorkspaceSkill | CatalogSkill,
-) {
-  if (filter === "all") {
-    return true;
-  }
-
-  if (skill.locationType === "library") {
-    if (filter === "needs-action") {
-      return skill.catalogStatus !== "synced";
-    }
-
-    if (filter === "changed") {
-      return skill.catalogStatus === "changed";
-    }
-
-    if (filter === "missing") {
-      return skill.catalogStatus === "missing";
-    }
-
-    return skill.catalogStatus === "synced";
-  }
-
-  const hasUpdates = skill.installations.some(
-    (installation) => installation.status === "update-available",
-  );
-  const hasMissing = skill.installations.some(
-    (installation) => installation.status === "missing",
-  );
-  const allInstalled = skill.installations.every(
-    (installation) => installation.status === "installed",
-  );
-
-  if (filter === "needs-action") {
-    return hasUpdates || hasMissing;
-  }
-
-  if (filter === "changed") {
-    return hasUpdates;
-  }
-
-  if (filter === "missing") {
-    return hasMissing;
-  }
-
-  return allInstalled;
-}
-
-function buildSkillFilters(
-  skills: Array<WorkspaceSkill | CatalogSkill>,
-  mode?: SectionMode,
-) {
-  const catalogMode = mode === "catalog";
-  const filters: Array<{
-    key: SkillFilter;
-    label: string;
-    description: string;
-  }> = [
-    {
-      key: "all",
-      label: "全部",
-      description: "当前视图的全部 skills",
-    },
-    {
-      key: "needs-action",
-      label: "待处理",
-      description: catalogMode ? "未安装或有更新" : "缺镜像或有差异",
-    },
-    {
-      key: "changed",
-      label: catalogMode ? "可更新" : "有差异",
-      description: catalogMode ? "本地版本落后于镜像" : "本地与镜像 hash 不一致",
-    },
-    {
-      key: "missing",
-      label: catalogMode ? "未安装" : "缺云端",
-      description: catalogMode ? "至少一个本地库未安装" : "还没同步到云端镜像",
-    },
-    {
-      key: "synced",
-      label: catalogMode ? "已安装" : "已对齐",
-      description: catalogMode ? "所有目标库均已安装" : "本地与云端一致",
-    },
-  ];
-
-  return filters.map((filter) => ({
-    ...filter,
-    count: skills.filter((skill) => skillMatchesFilter(filter.key, skill)).length,
-  }));
-}
-
-function getInitialSection(data: DashboardData) {
-  return data.librarySummaries.find((library) => library.id === "claude")?.id ??
-    data.librarySummaries[0]?.id ??
-    "catalog";
-}
-
-async function parseResponse(response: Response) {
-  return (await response.json()) as Partial<ActionResponse> & {
-    ok?: boolean;
-    message?: string;
-    detail?: SkillDetail;
-  };
-}
-
-async function fetchDashboardData() {
-  const response = await fetch("/api/dashboard", {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error("无法刷新技能面板。");
-  }
-
-  return (await response.json()) as DashboardData;
-}
-
-function buildSections(data: DashboardData): Section[] {
-  const librarySections = data.librarySummaries.map((library) => ({
-    key: library.id,
-    label: library.label,
-    mode: "library" as const,
-    description: library.description || `${library.label} 本地技能库`,
-  }));
-
-  return [
-    ...librarySections,
-    {
-      key: "catalog",
-      label: "云端镜像",
-      mode: "catalog",
-      description: "远端仓库里正在追踪的 skill 镜像",
-    },
-    {
-      key: "sync",
-      label: "同步",
-      mode: "sync",
-      description: "Claude / Codex / Agents / 云端镜像的差异检查",
-    },
-    {
-      key: "settings",
-      label: "配置",
-      mode: "settings",
-      description: "本地目录、远端仓库与管理参数",
-    },
-  ];
-}
-
-function MarkdownPanel({ content }: { content?: string }) {
-  if (!content) {
-    return <p className="empty-copy">这里还没有内容。</p>;
-  }
-
-  return (
-    <div className="markdown-shell">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  );
 }
 
 function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
@@ -457,10 +363,9 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
       .filter((entry) => Boolean(entry.skill));
     const referenceSkill = catalogSkill ?? librarySkills[0]?.skill;
     const distinctVersions = new Set(
-      [
-        catalogSkill?.hash,
-        ...librarySkills.map((entry) => entry.skill?.hash),
-      ].filter(Boolean),
+      [catalogSkill?.hash, ...librarySkills.map((entry) => entry.skill?.hash)].filter(
+        Boolean,
+      ),
     ).size;
     const missingLibraries = libraries.filter(
       (library) => !workspaceByLibrary.get(library.id)?.has(skillId),
@@ -471,10 +376,10 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
 
     if (!catalogSkill && librarySkills.length > 0 && distinctVersions > 1) {
       status = "drift";
-      recommendation = "本地库之间已经出现差异，建议先统一本地版本，再决定是否同步到云端镜像。";
+      recommendation = "本地库之间已经出现差异，建议先统一本地版本。";
     } else if (!catalogSkill && librarySkills.length > 0) {
       status = "mirror-missing";
-      recommendation = "建议把当前本地版本同步到云端镜像，便于后续检查更新。";
+      recommendation = "建议把当前本地版本备份到远端 skills 仓库。";
     } else if (catalogSkill && librarySkills.length === 0) {
       status = "mirror-only";
       recommendation = "云端存在镜像，但本地库都还没安装。";
@@ -525,16 +430,13 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
       },
     ];
 
-    const name = referenceSkill?.name ?? skillId;
-    const description =
-      referenceSkill?.shortDescription ??
-      referenceSkill?.description ??
-      "暂无描述。";
-
     return {
       id: skillId,
-      name,
-      description,
+      name: referenceSkill?.name ?? skillId,
+      description:
+        referenceSkill?.shortDescription ??
+        referenceSkill?.description ??
+        "暂无描述。",
       status,
       recommendation,
       distinctVersions,
@@ -556,7 +458,7 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
         return true;
       }
 
-      const haystack = [
+      return [
         row.id,
         row.name,
         row.description,
@@ -564,9 +466,8 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
         ...row.locations.map((location) => location.locationLabel),
       ]
         .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(query);
+        .toLowerCase()
+        .includes(query);
     })
     .sort((left, right) => {
       const rankDifference = statusRank[left.status] - statusRank[right.status];
@@ -579,142 +480,199 @@ function buildSyncMatrix(data: DashboardData, query: string): SyncMatrixRow[] {
     });
 }
 
-function JsonPanel({ value }: { value?: Record<string, unknown> }) {
-  if (!value) {
-    return <p className="empty-copy">暂无 JSON 配置。</p>;
+async function parseResponse(response: Response) {
+  return (await response.json()) as Partial<ActionResponse> & {
+    ok?: boolean;
+    message?: string;
+    detail?: SkillDetail;
+  };
+}
+
+async function fetchDashboardData() {
+  const response = await fetch("/api/dashboard", {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("无法刷新技能面板。");
   }
 
-  return <pre className="code-panel">{JSON.stringify(value, null, 2)}</pre>;
+  return (await response.json()) as DashboardData;
 }
 
-function SectionButton({
-  section,
-  active,
-  badge,
-  onClick,
-}: {
-  section: Section;
-  active: boolean;
-  badge?: string | number;
-  onClick: () => void;
-}) {
+function MarkdownPanel({ content }: { content?: string }) {
+  if (!content) {
+    return <p className="hub-empty-copy">这里还没有内容。</p>;
+  }
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`section-button ${active ? "section-button-active" : ""}`}
-    >
-      <span>{section.label}</span>
-      {badge !== undefined ? <span className="section-badge">{badge}</span> : null}
-    </button>
+    <div className="hub-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
   );
 }
 
-function SidebarSectionButton({
-  section,
+function JsonPanel({ value }: { value?: Record<string, unknown> }) {
+  if (!value) {
+    return <p className="hub-empty-copy">暂无 JSON 配置。</p>;
+  }
+
+  return <pre className="hub-code-panel">{JSON.stringify(value, null, 2)}</pre>;
+}
+
+function FilterButton({
   active,
-  badge,
+  label,
+  count,
+  icon,
   onClick,
 }: {
-  section: Section;
   active: boolean;
-  badge?: string | number;
+  label: string;
+  count?: number;
+  icon?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      className={`hub-filter-button ${active ? "hub-filter-button-active" : ""}`}
       onClick={onClick}
-      className={`sidebar-section-button ${
-        active ? "sidebar-section-button-active" : ""
-      }`}
     >
-      <span>
-        <span className="sidebar-section-label">{section.label}</span>
-        <span className="sidebar-section-copy">{section.description}</span>
+      <span className="hub-filter-label">
+        {icon ? <span>{icon}</span> : null}
+        <span>{label}</span>
       </span>
-      {badge !== undefined ? <span className="section-badge">{badge}</span> : null}
+      {count !== undefined ? <span className="hub-filter-count">{count}</span> : null}
     </button>
   );
 }
 
-function SkillFilterBar({
-  options,
-  active,
-  onChange,
+function FilterGroup({
+  title,
+  children,
 }: {
-  options: ReturnType<typeof buildSkillFilters>;
-  active: SkillFilter;
-  onChange: (filter: SkillFilter) => void;
+  title: string;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="filter-bar">
-      {options.map((option) => (
-        <button
-          type="button"
-          key={option.key}
-          className={`filter-chip ${active === option.key ? "filter-chip-active" : ""}`}
-          onClick={() => onChange(option.key)}
-          title={option.description}
-        >
-          <span>{option.label}</span>
-          <span className="filter-count">{option.count}</span>
-        </button>
+    <div className="hub-filter-group">
+      <p className="hub-filter-title">{title}</p>
+      <div className="hub-filter-list">{children}</div>
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  tone?: "blue" | "amber" | "cyan" | "green" | "muted";
+}) {
+  return (
+    <article className={`hub-stat-card ${tone ? `hub-stat-${tone}` : ""}`}>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </article>
+  );
+}
+
+function SkillCard({
+  skill,
+  selected,
+  onClick,
+}: {
+  skill: StoreSkill;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`hub-skill-card ${selected ? "hub-skill-card-active" : ""}`}
+      onClick={onClick}
+    >
+      <div className="hub-skill-card-head">
+        <h3>/{skill.name}</h3>
+        <div className="hub-card-badges">
+          <span className="hub-agent-badge">
+            <span>{skill.agentIcon}</span>
+            {skill.agentLabel}
+          </span>
+          <span className="hub-scope-badge">{skill.scopeLabel}</span>
+        </div>
+      </div>
+      <p>{skill.shortDescription || skill.description || "暂无描述"}</p>
+      <div className="hub-skill-card-foot">
+        <span className={`hub-source-badge ${skill.sourceBadge === "agents" ? "hub-source-agents" : ""}`}>
+          {skill.sourceBadge}
+        </span>
+        <span className={`hub-mini-badge ${statusClass(skill.statusTone)}`}>
+          {skill.statusLabel}
+        </span>
+      </div>
+      {skill.homepage ? <Link2 className="hub-card-link" size={15} /> : null}
+    </button>
+  );
+}
+
+function GroupedSkillGrid({
+  groups,
+  selectedKey,
+  onSelect,
+}: {
+  groups: Array<{ key: string; label: string; items: StoreSkill[] }>;
+  selectedKey?: string;
+  onSelect: (skill: StoreSkill) => void;
+}) {
+  if (groups.every((group) => group.items.length === 0)) {
+    return (
+      <div className="hub-empty-state">
+        <PackageSearch size={28} />
+        <p>没有匹配的 Skills</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="hub-group-stack">
+      {groups.map((group) => (
+        <section key={group.key} className="hub-skill-group">
+          <div className="hub-group-title">
+            <h2>{group.label}</h2>
+            <span>{group.items.length}</span>
+            <div />
+          </div>
+          <div className="hub-skill-grid">
+            {group.items.map((skill) => (
+              <SkillCard
+                key={skill.key}
+                skill={skill}
+                selected={selectedKey === skill.key}
+                onClick={() => onSelect(skill)}
+              />
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
 }
 
-function Pagination({
-  page,
-  totalPages,
-  onPrev,
-  onNext,
-}: {
-  page: number;
-  totalPages: number;
-  onPrev: () => void;
-  onNext: () => void;
-}) {
+function LibrarySummaryCard({ library }: { library: LibrarySummary }) {
   return (
-    <div className="pagination-shell">
-      <ActionButton
-        label="上一页"
-        onClick={onPrev}
-        disabled={page <= 1}
-        tone="ghost"
-        size="compact"
-      />
-      <span className="caption-text">
-        第 {page} / {Math.max(totalPages, 1)} 页
-      </span>
-      <ActionButton
-        label="下一页"
-        onClick={onNext}
-        disabled={page >= totalPages}
-        tone="ghost"
-        size="compact"
-      />
-    </div>
-  );
-}
-
-function LibraryStatusCard({ library }: { library: LibrarySummary }) {
-  return (
-    <article className="overview-card">
-      <div className="overview-card-head">
-        <div>
-          <p className="mini-eyebrow">{library.label}</p>
-          <h3 className="overview-title">{library.skillCount}</h3>
-        </div>
-        <span className="status-pill status-pill-subtle">
-          {library.updateAvailableCount} 个可更新
-        </span>
+    <article className="hub-library-card">
+      <div>
+        <p>{library.label}</p>
+        <strong>{library.skillCount}</strong>
       </div>
-      <div className="overview-row">
-        <span>云端一致 {library.syncedCount}</span>
-        <span>镜像缺失 {library.missingCount}</span>
-        <span>版本差异 {library.changedCount}</span>
+      <div className="hub-library-meta">
+        <span>已同步 {library.syncedCount}</span>
+        <span>缺云端 {library.missingCount}</span>
+        <span>有差异 {library.changedCount}</span>
       </div>
     </article>
   );
@@ -722,32 +680,28 @@ function LibraryStatusCard({ library }: { library: LibrarySummary }) {
 
 export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [data, setData] = useState(initialData);
-  const [activeSection, setActiveSection] = useState(getInitialSection(initialData));
-  const [skillFilter, setSkillFilter] = useState<SkillFilter>("all");
+  const [activeView, setActiveView] = useState<ActiveView>("skills");
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
+  const [agentFilter, setAgentFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [libraryFilter, setLibraryFilter] = useState("all");
+  const [groupBy, setGroupBy] = useState<GroupBy>("library");
   const [search, setSearch] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  const [pageBySection, setPageBySection] = useState<Record<string, number>>({});
-  const [selectedSkillIds, setSelectedSkillIds] = useState<Record<string, string>>({});
+  const [selectedSkill, setSelectedSkill] = useState<StoreSkill | null>(null);
   const [detailsCache, setDetailsCache] = useState<Record<string, SkillDetail>>({});
   const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null);
-  const [previewTab, setPreviewTab] = useState<PreviewTab>("overview");
-  const [configDraft, setConfigDraft] = useState<SkillHubConfig>(initialData.config);
+  const [detailTab, setDetailTab] = useState<DetailTab>("overview");
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
-
-  const sections = useMemo(() => buildSections(data), [data]);
-  const activeSectionConfig =
-    sections.find((section) => section.key === activeSection) ?? sections[0];
-  const itemsPerPage = 10;
 
   function applyDashboard(nextData: DashboardData) {
     startTransition(() => {
       setData(nextData);
       setDetailsCache({});
-      setConfigDraft(nextData.config);
     });
   }
 
@@ -760,9 +714,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     endpoint: string,
     body: unknown,
     key: string,
-    options?: {
-      confirmMessage?: string;
-    },
+    options?: { confirmMessage?: string },
   ) {
     if (options?.confirmMessage && !window.confirm(options.confirmMessage)) {
       return;
@@ -785,7 +737,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         throw new Error(payload.message ?? "操作失败。");
       }
 
-      applyDashboard(payload.dashboard as DashboardData);
+      applyDashboard(payload.dashboard);
       setNotice({
         kind: "success",
         text: payload.message ?? "操作完成。",
@@ -827,157 +779,146 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     };
   }, []);
 
-  useEffect(() => {
-    if (activeSectionConfig) {
-      setPreviewTab("overview");
-      setSkillFilter("all");
+  const allSkills = useMemo(() => buildStoreSkills(data), [data]);
+  const duplicateGroups = useMemo(() => buildDuplicateGroups(allSkills), [allSkills]);
+
+  const filteredSkills = useMemo(() => {
+    return allSkills.filter((skill) => {
+      if (scopeFilter !== "all" && skill.locationType !== scopeFilter) {
+        return false;
+      }
+
+      if (agentFilter !== "all" && skill.sourceId !== agentFilter) {
+        return false;
+      }
+
+      if (libraryFilter !== "all" && skill.sourceId !== libraryFilter) {
+        return false;
+      }
+
+      if (statusFilter === "local" && skill.locationType !== "library") {
+        return false;
+      }
+
+      if (statusFilter === "agents" && skill.locationType !== "catalog") {
+        return false;
+      }
+
+      if (
+        statusFilter === "pending" &&
+        (skill.statusTone === "good" || skill.statusLabel === "已同步")
+      ) {
+        return false;
+      }
+
+      if (statusFilter === "changed" && skill.statusTone !== "warn") {
+        return false;
+      }
+
+      if (statusFilter === "synced" && skill.statusTone !== "good") {
+        return false;
+      }
+
+      return matchesSearch(deferredSearch, skill);
+    });
+  }, [
+    agentFilter,
+    allSkills,
+    deferredSearch,
+    libraryFilter,
+    scopeFilter,
+    statusFilter,
+  ]);
+
+  const groupedSkills = useMemo(() => {
+    if (groupBy === "flat") {
+      return [{ key: "all", label: "全部 Skills", items: filteredSkills }];
     }
-  }, [activeSectionConfig]);
 
-  useEffect(() => {
-    if (!sections.some((section) => section.key === activeSection)) {
-      setActiveSection(getInitialSection(data));
-    }
-  }, [activeSection, data, sections]);
+    const groups = new Map<string, StoreSkill[]>();
 
-  const rawCurrentSkills = useMemo(() => {
-    if (activeSectionConfig?.mode === "catalog") {
-      return data.catalogSkills;
-    }
+    for (const skill of filteredSkills) {
+      const key = groupBy === "source" ? skill.sourceBadge : skill.sourceId;
+      const label = groupBy === "source" ? skill.sourceBadge : skill.sourceLabel;
+      groups.set(key, [...(groups.get(key) ?? []), skill]);
 
-    if (activeSectionConfig?.mode === "library") {
-      return data.workspaceSkills.filter(
-        (skill) => skill.sourceId === activeSectionConfig.key,
-      );
+      if (!groups.has(`${key}:label`)) {
+        groups.set(`${key}:label`, [{ ...skill, name: label }]);
+      }
     }
 
-    return [];
-  }, [activeSectionConfig, data.catalogSkills, data.workspaceSkills]);
-
-  const currentSkills = useMemo(() => {
-    return rawCurrentSkills
-      .filter((skill) => skillMatchesFilter(skillFilter, skill))
-      .filter((skill) => {
-        if (skill.locationType === "catalog") {
-          return matchesSearch(
-            deferredSearch,
-            skill,
-            skill.installations.map((installation) => installation.libraryLabel),
-          );
-        }
-
-        return matchesSearch(deferredSearch, skill, [
-          skill.catalogImportedFrom ?? "",
-        ]);
-      });
-  }, [deferredSearch, rawCurrentSkills, skillFilter]);
-
-  const skillFilterOptions = useMemo(
-    () => buildSkillFilters(rawCurrentSkills, activeSectionConfig?.mode),
-    [activeSectionConfig?.mode, rawCurrentSkills],
-  );
+    return Array.from(groups.entries())
+      .filter(([key]) => !key.endsWith(":label"))
+      .map(([key, items]) => ({
+        key,
+        label: groups.get(`${key}:label`)?.[0]?.name ?? key,
+        items,
+      }))
+      .sort((left, right) => right.items.length - left.items.length);
+  }, [filteredSkills, groupBy]);
 
   const syncRows = useMemo(
     () => buildSyncMatrix(data, deferredSearch),
     [data, deferredSearch],
   );
-
-  const currentPage = pageBySection[activeSection] ?? 1;
-  const totalPages = Math.max(Math.ceil(currentSkills.length / itemsPerPage), 1);
-  const safePage = Math.min(currentPage, totalPages);
-  const pagedSkills = currentSkills.slice(
-    (safePage - 1) * itemsPerPage,
-    safePage * itemsPerPage,
-  );
-  const selectedSkillId = selectedSkillIds[activeSection];
-  const selectedSkill =
-    currentSkills.find((skill) => skill.id === selectedSkillId) ?? pagedSkills[0];
-
-  useEffect(() => {
-    if (
-      (activeSectionConfig?.mode === "library" ||
-        activeSectionConfig?.mode === "catalog") &&
-      selectedSkill
-    ) {
-      setSelectedSkillIds((current) => ({
-        ...current,
-        [activeSection]: selectedSkill.id,
-      }));
-    }
-  }, [activeSection, activeSectionConfig?.mode, selectedSkill]);
-
-  useEffect(() => {
-    if (currentPage !== safePage) {
-      setPageBySection((current) => ({
-        ...current,
-        [activeSection]: safePage,
-      }));
-    }
-  }, [activeSection, currentPage, safePage]);
-
-  const detailCacheKey = selectedSkill
-    ? `${selectedSkill.locationType}:${selectedSkill.sourceId}:${selectedSkill.id}`
-    : null;
-  const selectedDetail = detailCacheKey ? detailsCache[detailCacheKey] : undefined;
-  const syncTotalPages = Math.max(Math.ceil(syncRows.length / itemsPerPage), 1);
-  const syncSafePage = Math.min(pageBySection.sync ?? 1, syncTotalPages);
-  const pagedSyncRows = syncRows.slice(
-    (syncSafePage - 1) * itemsPerPage,
-    syncSafePage * itemsPerPage,
-  );
+  const topStats = [
+    { label: "总计", value: allSkills.length },
+    { label: "本地", value: data.summary.workspaceSkills, tone: "blue" as const },
+    { label: "云端", value: data.summary.catalogSkills, tone: "amber" as const },
+    { label: "来源", value: data.summary.libraries, tone: "cyan" as const },
+    { label: "待同步", value: data.summary.pendingImports + data.summary.pendingInstalls, tone: "green" as const },
+    { label: "冲突", value: duplicateGroups.length, tone: "muted" as const },
+  ];
+  const selectedWorkspaceSkill =
+    selectedSkill?.record.locationType === "library"
+      ? selectedSkill.record
+      : undefined;
+  const selectedCatalogRecord =
+    selectedSkill?.record.locationType === "catalog"
+      ? selectedSkill.record
+      : undefined;
   const selectedCatalogSkill =
-    selectedSkill?.locationType === "library"
-      ? data.catalogSkills.find((skill) => skill.id === selectedSkill.id)
+    selectedWorkspaceSkill
+      ? data.catalogSkills.find((skill) => skill.id === selectedWorkspaceSkill.id)
       : undefined;
   const selectedLibrarySyncTargets =
-    selectedSkill?.locationType === "library"
+    selectedWorkspaceSkill
       ? data.config.libraries
-          .filter((library) => library.id !== selectedSkill.sourceId)
+          .filter((library) => library.id !== selectedWorkspaceSkill.sourceId)
           .map((library) => {
             const installedSkill = data.workspaceSkills.find(
               (skill) =>
-                skill.sourceId === library.id && skill.id === selectedSkill.id,
+                skill.sourceId === library.id &&
+                skill.id === selectedWorkspaceSkill.id,
             );
 
-            return {
-              library,
-              installedSkill,
-            };
+            return { library, installedSkill };
           })
       : [];
+  const detailCacheKey = selectedSkill
+    ? `${selectedSkill.record.locationType}:${selectedSkill.record.sourceId}:${selectedSkill.id}`
+    : null;
+  const selectedDetail = detailCacheKey ? detailsCache[detailCacheKey] : undefined;
 
   useEffect(() => {
-    if ((pageBySection.sync ?? 1) !== syncSafePage) {
-      setPageBySection((current) => ({
-        ...current,
-        sync: syncSafePage,
-      }));
-    }
-  }, [pageBySection.sync, syncSafePage]);
+    const currentSkill = selectedSkill;
 
-  useEffect(() => {
-    if (
-      !selectedSkill ||
-      (activeSectionConfig?.mode !== "library" &&
-        activeSectionConfig?.mode !== "catalog")
-    ) {
+    if (!currentSkill || !detailCacheKey || detailsCache[detailCacheKey]) {
       return;
     }
 
-    const cacheKey = `${selectedSkill.locationType}:${selectedSkill.sourceId}:${selectedSkill.id}`;
-
-    if (detailsCache[cacheKey]) {
-      return;
-    }
-
+    const detailKey = detailCacheKey;
+    const skillId = currentSkill.id;
+    const sourceId = currentSkill.record.sourceId;
+    const locationType = currentSkill.record.locationType;
     let cancelled = false;
 
     async function loadDetail() {
-      setDetailLoadingKey(cacheKey);
+      setDetailLoadingKey(detailKey);
 
       try {
         const response = await fetch(
-          `/api/skills/detail?skillId=${encodeURIComponent(selectedSkill.id)}&sourceId=${encodeURIComponent(selectedSkill.sourceId)}&locationType=${selectedSkill.locationType}`,
+          `/api/skills/detail?skillId=${encodeURIComponent(skillId)}&sourceId=${encodeURIComponent(sourceId)}&locationType=${locationType}`,
           {
             cache: "no-store",
           },
@@ -991,7 +932,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         if (!cancelled) {
           setDetailsCache((current) => ({
             ...current,
-            [cacheKey]: payload.detail as SkillDetail,
+            [detailKey]: payload.detail as SkillDetail,
           }));
         }
       } catch (error) {
@@ -1013,1093 +954,666 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeSectionConfig?.mode, detailsCache, selectedSkill]);
+  }, [detailCacheKey, detailsCache, selectedSkill]);
 
-  function updateLibraryDraft(
-    libraryId: string,
-    field: keyof SkillHubConfig["libraries"][number],
-    value: string,
-  ) {
-    setConfigDraft((current) => ({
-      ...current,
-      libraries: current.libraries.map((library) =>
-        library.id === libraryId ? { ...library, [field]: value } : library,
-      ),
-    }));
-  }
-
-  function addLibraryDraft() {
-    setConfigDraft((current) => ({
-      ...current,
-      libraries: [
-        ...current.libraries,
-        {
-          id: `library-${current.libraries.length + 1}`,
-          label: "New Library",
-          path: "",
-          description: "",
-        },
-      ],
-    }));
-  }
-
-  function removeLibraryDraft(libraryId: string) {
-    setConfigDraft((current) => ({
-      ...current,
-      libraries: current.libraries.filter((library) => library.id !== libraryId),
-    }));
-  }
-
-  const topStats = [
-    {
-      label: "本地技能",
-      value: data.summary.workspaceSkills,
-      copy: "跨 Claude / Codex / Agents",
-    },
-    {
-      label: "云端镜像",
-      value: data.summary.catalogSkills,
-      copy: "远端仓库已追踪的 skills",
-    },
-    {
-      label: "待同步",
-      value: data.summary.pendingImports + data.summary.pendingInstalls,
-      copy: `${data.summary.pendingImports} 个镜像待同步，${data.summary.pendingInstalls} 个本地待更新`,
-    },
-    {
-      label: "分支",
-      value: data.git.branch ?? data.config.catalog.defaultBranch,
-      copy: data.git.clean ? "工作区干净" : `${data.git.dirtyFiles.length} 个变更待处理`,
-    },
-  ];
+  const navItems = [
+    { key: "skills", label: "Skills" },
+    { key: "similar", label: "相似检测", badge: duplicateGroups.length },
+    { key: "dashboard", label: "仪表盘" },
+    { key: "sync", label: "同步", badge: data.summary.pendingImports + data.summary.pendingInstalls },
+    { key: "trash", label: "回收站", badge: 0 },
+  ] satisfies Array<{ key: ActiveView; label: string; badge?: number }>;
 
   return (
-    <main className="manager-shell">
-      <header className="hero-strip">
-        <div className="hero-copy-block">
-          <p className="hero-kicker">Qianzhu Skill Manager</p>
-          <h1 className="hero-heading">
-            管理你已经装上的 skills，而不是做一个臃肿商店。
-          </h1>
-          <p className="hero-lead">
-            现在的主视角是 `Claude / Codex / Agents` 已安装技能库，重点看预览、差异、删除、更新和同步状态。云端仓库只是镜像层，不再喧宾夺主。
-          </p>
-        </div>
-
-        <div className="hero-sync-chip">
-          <div className="hero-sync-row">
-            <GitBranch size={16} />
-            <span>{data.git.branch ?? "未命名分支"}</span>
-          </div>
-          <div className="hero-sync-row">
-            <ArrowRightLeft size={16} />
-            <span>{data.git.remote ?? data.config.catalog.remoteRepoUrl}</span>
-          </div>
-        </div>
-      </header>
-
-      <section className="metric-row">
-        {topStats.map((item) => (
-          <article className="metric-card" key={item.label}>
-            <p className="metric-label">{item.label}</p>
-            <p className="metric-value">{item.value}</p>
-            <p className="metric-copy">{item.copy}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="manager-workbench">
-        <aside className="sidebar-rail">
-          <div className="sidebar-card sidebar-card-brand">
-            <p className="mini-eyebrow">Skill Hub Mode</p>
-            <h2 className="sidebar-title">本地技能控制台</h2>
-            <p className="sidebar-copy">
-              参考 Skill Hub 的左侧导航和状态筛选，但保留 Codex / Claude
-              双库同步与 GitHub 镜像能力。
-            </p>
+    <main className="hub-gradient">
+      <section className="hub-shell">
+        <header className="hub-header">
+          <div className="hub-brand">
+            <div className="hub-logo">黄</div>
+            <strong>Skill 管理器</strong>
           </div>
 
-          <div className="sidebar-card">
-            <p className="sidebar-kicker">Agent Libraries</p>
-            <div className="sidebar-section-list">
-              {sections.map((section) => (
-                <SidebarSectionButton
-                  key={section.key}
-                  section={section}
-                  active={activeSection === section.key}
-                  badge={sectionBadge(section, data)}
-                  onClick={() => setActiveSection(section.key)}
-                />
-              ))}
-            </div>
-          </div>
+          <nav className="hub-top-tabs">
+            {navItems.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                className={activeView === item.key ? "hub-top-tab-active" : ""}
+                onClick={() => setActiveView(item.key)}
+              >
+                {item.label}
+                {item.badge ? <span>{item.badge}</span> : null}
+              </button>
+            ))}
+          </nav>
 
-          <div className="sidebar-card sidebar-sync-card">
-            <p className="sidebar-kicker">Sync Radar</p>
-            <div className="sync-radar-row">
-              <span>待同步</span>
-              <strong>{data.summary.pendingImports + data.summary.pendingInstalls}</strong>
-            </div>
-            <div className="sync-radar-row">
-              <span>云端镜像</span>
-              <strong>{data.summary.catalogSkills}</strong>
-            </div>
-            <div className="sync-radar-row">
-              <span>Git 状态</span>
-              <strong>{data.git.clean ? "Clean" : "Dirty"}</strong>
-            </div>
-          </div>
-        </aside>
-
-        <section className="panel-shell">
-          <div className="section-nav mobile-section-nav">
-          {sections.map((section) => {
-            const badge = sectionBadge(section, data);
-
-            return (
-              <SectionButton
-                key={section.key}
-                section={section}
-                active={activeSection === section.key}
-                badge={badge}
-                onClick={() => setActiveSection(section.key)}
+          <div className="hub-header-actions">
+            <label className="hub-search">
+              <Search size={17} />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索 Skills...（名称/描述）"
               />
-            );
-          })}
-          </div>
-
-          <div className="toolbar-row">
-          <div>
-            <p className="mini-eyebrow">{activeSectionConfig?.label}</p>
-            <h2 className="section-heading">{activeSectionConfig?.description}</h2>
-          </div>
-
-          <div className="toolbar-actions">
-            {activeSectionConfig?.mode !== "settings" ? (
-              <label className="search-shell">
-                <Search size={16} />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder={
-                    activeSectionConfig?.mode === "sync"
-                      ? "搜索技能名、状态、目标库"
-                      : "搜索技能名、描述、命令、触发词"
-                  }
-                />
-              </label>
-            ) : null}
-            <ActionButton
-              label="刷新"
-              icon={<RefreshCw size={16} />}
-              busy={busyKey === "refresh"}
+            </label>
+            <button type="button" className="hub-icon-button" aria-label="Theme">
+              <Moon size={17} />
+            </button>
+            <button
+              type="button"
+              className="hub-scan-button"
+              disabled={busyKey === "refresh"}
               onClick={async () => {
                 setBusyKey("refresh");
                 setNotice(null);
 
                 try {
                   await refreshDashboard();
-                  setNotice({
-                    kind: "success",
-                    text: "已刷新数据。",
-                  });
+                  setNotice({ kind: "success", text: "已完成扫描。" });
                 } catch (error) {
                   setNotice({
                     kind: "error",
-                    text: error instanceof Error ? error.message : "刷新失败。",
+                    text: error instanceof Error ? error.message : "扫描失败。",
                   });
                 } finally {
                   setBusyKey(null);
                 }
               }}
-              tone="ghost"
-            />
+            >
+              <RefreshCw size={16} className={busyKey === "refresh" ? "spin" : ""} />
+              一键扫描
+            </button>
           </div>
-          </div>
+        </header>
 
-          {(activeSectionConfig?.mode === "library" ||
-            activeSectionConfig?.mode === "catalog") ? (
-            <SkillFilterBar
-              options={skillFilterOptions}
-              active={skillFilter}
-              onChange={setSkillFilter}
-            />
-          ) : null}
-
-          {notice ? (
-          <div
-            className={`notice-banner ${
-              notice.kind === "success" ? "notice-success" : "notice-error"
-            }`}
-          >
-            {notice.text}
-          </div>
-          ) : null}
-
-          {activeSectionConfig?.mode === "sync" ? (
-          <section className="sync-grid">
-            <article className="surface-card">
-              <div className="surface-head">
-                <div>
-                  <p className="mini-eyebrow">Remote Mirror</p>
-                  <h3 className="surface-title">远端仓库与镜像操作</h3>
-                </div>
-                <span
-                  className={`status-pill ${
-                    data.git.clean ? "status-pill-good" : "status-pill-warn"
-                  }`}
-                >
-                  {data.git.clean ? "工作区干净" : "存在未提交变更"}
-                </span>
-              </div>
-
-              <div className="info-grid">
-                <div className="info-pill">
-                  <GitBranch size={16} />
-                  <span>{data.git.branch ?? "未创建分支"}</span>
-                </div>
-                <div className="info-pill">
-                  <CloudUpload size={16} />
-                  <span>{data.git.remote ?? data.config.catalog.remoteRepoUrl}</span>
-                </div>
-                <div className="info-pill">
-                  <RefreshCw size={16} />
-                  <span>{formatDateTime(data.generatedAt)} 更新</span>
-                </div>
-              </div>
-
-              <div className="action-row-wrap">
-                <ActionButton
-                  label="连接远端"
-                  icon={<CloudUpload size={16} />}
-                  busy={busyKey === "sync-connect"}
-                  onClick={() =>
-                    runAction("/api/actions/sync", { action: "connect" }, "sync-connect")
-                  }
-                  tone="secondary"
-                />
-                <ActionButton
-                  label="检查远端"
-                  icon={<RefreshCw size={16} />}
-                  busy={busyKey === "sync-fetch"}
-                  onClick={() =>
-                    runAction("/api/actions/sync", { action: "fetch" }, "sync-fetch")
-                  }
-                  tone="ghost"
-                />
-                <ActionButton
-                  label="拉取镜像"
-                  icon={<CloudDownload size={16} />}
-                  busy={busyKey === "sync-pull"}
-                  onClick={() =>
-                    runAction("/api/actions/sync", { action: "pull" }, "sync-pull")
-                  }
-                  tone="ghost"
-                />
-                <ActionButton
-                  label="推送镜像"
-                  icon={<CloudUpload size={16} />}
-                  busy={busyKey === "sync-push"}
-                  onClick={() =>
-                    runAction("/api/actions/sync", { action: "push" }, "sync-push")
-                  }
-                />
-                <ActionButton
-                  label="重建镜像索引"
-                  icon={<Blocks size={16} />}
-                  busy={busyKey === "rebuild"}
-                  onClick={() => runAction("/api/actions/rebuild", {}, "rebuild")}
-                  tone="secondary"
-                />
-              </div>
-            </article>
-
-            <article className="surface-card">
-              <div className="surface-head">
-                <div>
-                  <p className="mini-eyebrow">Sync Matrix</p>
-                  <h3 className="surface-title">已安装 skill 的同步矩阵</h3>
-                </div>
-              </div>
-
-              <div className="overview-grid">
-                {data.librarySummaries.map((library) => (
-                  <LibraryStatusCard key={library.id} library={library} />
-                ))}
-              </div>
-
-              <div className="matrix-list">
-                {pagedSyncRows.map((row) => (
-                  <article className="matrix-row" key={row.id}>
-                    <div className="matrix-row-head">
-                      <div>
-                        <div className="matrix-title-line">
-                          <h4 className="matrix-title">{row.name}</h4>
-                          <span className={`status-pill ${syncRowTone(row.status)}`}>
-                            {syncRowLabel(row.status)}
-                          </span>
-                        </div>
-                        <p className="matrix-copy">{row.description}</p>
-                      </div>
-                      <div className="matrix-meta">
-                        <span className="caption-text">{row.id}</span>
-                        <span className="caption-text">
-                          {row.distinctVersions} 个版本指纹
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="matrix-chip-row">
-                      {row.locations.map((location) => (
-                        <div className="matrix-chip" key={`${row.id}:${location.locationId}`}>
-                          <span className="caption-text">{location.locationLabel}</span>
-                          <span
-                            className={`status-pill ${syncCellTone(location.state)}`}
-                          >
-                            {syncCellLabel(location.state)}
-                          </span>
-                          {location.updatedAt ? (
-                            <span className="caption-text">
-                              {formatDate(location.updatedAt)}
-                            </span>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-
-                    <p className="matrix-tip">{row.recommendation}</p>
-                  </article>
-                ))}
-                {pagedSyncRows.length === 0 ? (
-                  <div className="empty-state">
-                    <ArrowRightLeft size={28} />
-                    <p>没有匹配到同步项，换个关键词试试。</p>
-                  </div>
-                ) : null}
-              </div>
-
-              <Pagination
-                page={syncSafePage}
-                totalPages={syncTotalPages}
-                onPrev={() =>
-                  setPageBySection((current) => ({
-                    ...current,
-                    sync: Math.max(syncSafePage - 1, 1),
-                  }))
-                }
-                onNext={() =>
-                  setPageBySection((current) => ({
-                    ...current,
-                    sync: Math.min(syncSafePage + 1, syncTotalPages),
-                  }))
-                }
+        <div className="hub-content">
+          <aside className="hub-sidebar">
+            <FilterGroup title="层级">
+              <FilterButton
+                active={scopeFilter === "all"}
+                label="全部"
+                count={allSkills.length}
+                icon="▣"
+                onClick={() => setScopeFilter("all")}
               />
+              <FilterButton
+                active={scopeFilter === "local"}
+                label="本地 Skills"
+                count={data.summary.workspaceSkills}
+                icon="🌐"
+                onClick={() => setScopeFilter("local")}
+              />
+              <FilterButton
+                active={scopeFilter === "catalog"}
+                label="云端镜像"
+                count={data.summary.catalogSkills}
+                icon="☁"
+                onClick={() => setScopeFilter("catalog")}
+              />
+            </FilterGroup>
 
-              <div className="dirty-shell">
-                <div className="dirty-head">
-                  <p className="mini-eyebrow">Dirty Files</p>
-                  <span className="caption-text">
-                    {data.git.dirtyFiles.length} 个文件
-                  </span>
-                </div>
-                {data.git.dirtyFiles.length > 0 ? (
-                  <div className="dirty-list">
-                    {data.git.dirtyFiles.map((dirtyFile) => (
-                      <code className="dirty-item" key={dirtyFile}>
-                        {dirtyFile}
-                      </code>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="empty-copy">当前没有未提交的本地改动。</p>
-                )}
-              </div>
-            </article>
-          </section>
-          ) : null}
+            <FilterGroup title="Agent 类型">
+              <FilterButton
+                active={agentFilter === "all"}
+                label="全部 Agent"
+                count={allSkills.length}
+                icon="▣"
+                onClick={() => setAgentFilter("all")}
+              />
+              {data.librarySummaries.map((library) => {
+                const meta = getAgentMeta(library.id);
 
-          {activeSectionConfig?.mode === "settings" ? (
-          <section className="settings-grid">
-            <article className="surface-card">
-              <div className="surface-head">
-                <div>
-                  <p className="mini-eyebrow">Mirror Config</p>
-                  <h3 className="surface-title">云端镜像与索引配置</h3>
-                </div>
-                <ActionButton
-                  label="保存配置"
-                  icon={<Save size={16} />}
-                  busy={busyKey === "save-config"}
-                  onClick={() =>
-                    runAction("/api/actions/config", configDraft, "save-config")
-                  }
+                return (
+                  <FilterButton
+                    key={library.id}
+                    active={agentFilter === library.id}
+                    label={meta.label}
+                    count={library.skillCount}
+                    icon={meta.icon}
+                    onClick={() => setAgentFilter(library.id)}
+                  />
+                );
+              })}
+            </FilterGroup>
+
+            <FilterGroup title="来源">
+              <FilterButton
+                active={statusFilter === "all"}
+                label="全部来源"
+                icon="○"
+                onClick={() => setStatusFilter("all")}
+              />
+              <FilterButton
+                active={statusFilter === "local"}
+                label="本地"
+                count={data.summary.workspaceSkills}
+                icon="🟢"
+                onClick={() => setStatusFilter("local")}
+              />
+              <FilterButton
+                active={statusFilter === "agents"}
+                label="Agents 平台"
+                count={data.summary.catalogSkills}
+                icon="🔵"
+                onClick={() => setStatusFilter("agents")}
+              />
+              <FilterButton
+                active={statusFilter === "changed"}
+                label="有更新"
+                icon="🟠"
+                onClick={() => setStatusFilter("changed")}
+              />
+              <FilterButton
+                active={statusFilter === "synced"}
+                label="已同步"
+                icon="✅"
+                onClick={() => setStatusFilter("synced")}
+              />
+            </FilterGroup>
+
+            <FilterGroup title="项目">
+              <FilterButton
+                active={libraryFilter === "all"}
+                label="全部项目"
+                icon="▤"
+                onClick={() => setLibraryFilter("all")}
+              />
+              {data.librarySummaries.map((library) => (
+                <FilterButton
+                  key={library.id}
+                  active={libraryFilter === library.id}
+                  label={library.label}
+                  count={library.skillCount}
+                  icon="📁"
+                  onClick={() => setLibraryFilter(library.id)}
                 />
-              </div>
+              ))}
+            </FilterGroup>
+          </aside>
 
-              <div className="form-grid">
-                <label className="field-shell">
-                  <span>标题</span>
-                  <input
-                    value={configDraft.catalog.title}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: { ...current.catalog, title: event.target.value },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-shell">
-                  <span>默认分支</span>
-                  <input
-                    value={configDraft.catalog.defaultBranch}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: {
-                          ...current.catalog,
-                          defaultBranch: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-shell field-wide">
-                  <span>描述</span>
-                  <textarea
-                    rows={3}
-                    value={configDraft.catalog.description}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: {
-                          ...current.catalog,
-                          description: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-shell field-wide">
-                  <span>远端仓库</span>
-                  <input
-                    value={configDraft.catalog.remoteRepoUrl}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: {
-                          ...current.catalog,
-                          remoteRepoUrl: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-shell">
-                  <span>镜像目录</span>
-                  <input
-                    value={configDraft.catalog.directory}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: {
-                          ...current.catalog,
-                          directory: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-shell">
-                  <span>索引文件</span>
-                  <input
-                    value={configDraft.catalog.indexFile}
-                    onChange={(event) =>
-                      setConfigDraft((current) => ({
-                        ...current,
-                        catalog: {
-                          ...current.catalog,
-                          indexFile: event.target.value,
-                        },
-                      }))
-                    }
-                  />
-                </label>
+          <section className="hub-main">
+            {notice ? (
+              <div className={`hub-notice hub-notice-${notice.kind}`}>
+                {notice.text}
               </div>
-            </article>
+            ) : null}
 
-            <article className="surface-card">
-              <div className="surface-head">
-                <div>
-                  <p className="mini-eyebrow">Libraries</p>
-                  <h3 className="surface-title">本地 skill 目录</h3>
-                </div>
-                <ActionButton
-                  label="新增目录"
-                  icon={<Plus size={16} />}
-                  onClick={addLibraryDraft}
-                  tone="secondary"
-                />
-              </div>
+            <section className="hub-stats-grid">
+              {topStats.map((stat) => (
+                <StatCard key={stat.label} {...stat} />
+              ))}
+            </section>
 
-              <div className="library-editor-list">
-                {configDraft.libraries.map((library) => (
-                  <div className="library-editor-card" key={library.id}>
-                    <div className="library-editor-grid">
-                      <label className="field-shell">
-                        <span>ID</span>
-                        <input
-                          value={library.id}
-                          onChange={(event) =>
-                            updateLibraryDraft(library.id, "id", event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="field-shell">
-                        <span>名称</span>
-                        <input
-                          value={library.label}
-                          onChange={(event) =>
-                            updateLibraryDraft(library.id, "label", event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="field-shell field-wide">
-                        <span>路径</span>
-                        <input
-                          value={library.path}
-                          onChange={(event) =>
-                            updateLibraryDraft(library.id, "path", event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="field-shell field-wide">
-                        <span>说明</span>
-                        <textarea
-                          rows={2}
-                          value={library.description ?? ""}
-                          onChange={(event) =>
-                            updateLibraryDraft(
-                              library.id,
-                              "description",
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-                    <div className="card-footer">
-                      <span className="caption-text">
-                        Docker 模式下，如果你新增了宿主机路径，也要同步更新
-                        `docker-compose.yml` 的挂载目录。
-                      </span>
-                      <ActionButton
-                        label="移除目录"
-                        icon={<Trash2 size={16} />}
-                        onClick={() => removeLibraryDraft(library.id)}
-                        tone="danger"
-                        size="compact"
-                      />
-                    </div>
+            {activeView === "skills" ? (
+              <>
+                <div className="hub-list-toolbar">
+                  <div>
+                    <button type="button" className="hub-view-icon">
+                      <Layers3 size={17} />
+                    </button>
+                    <span>共 {filteredSkills.length} 个 Skill</span>
                   </div>
-                ))}
-              </div>
-            </article>
-          </section>
-          ) : null}
-
-          {(activeSectionConfig?.mode === "library" ||
-          activeSectionConfig?.mode === "catalog") && (
-          <section className="workspace-grid">
-            <article className="surface-card list-panel">
-              <div className="surface-head">
-                <div>
-                  <p className="mini-eyebrow">Skill List</p>
-                  <h3 className="surface-title">
-                    {currentSkills.length} 个结果
-                  </h3>
-                </div>
-                <span className="caption-text">
-                  {deferredSearch ? `搜索：${deferredSearch}` : "按名称、命令、触发词检索"}
-                </span>
-              </div>
-
-              <div className="list-shell">
-                {pagedSkills.map((skill) => {
-                  const active = selectedSkill?.id === skill.id;
-                  const statusElement =
-                    skill.locationType === "catalog" ? (
-                      <span className="status-pill status-pill-subtle">
-                        {skill.installations.filter(
-                          (installation) => installation.status === "update-available",
-                        ).length > 0
-                          ? "本地有待更新"
-                          : "云端镜像"}
-                      </span>
-                    ) : (
-                      <span
-                        className={`status-pill ${workspaceStatusTone(
-                          skill.catalogStatus,
-                        )}`}
-                      >
-                        {workspaceStatusLabel(skill.catalogStatus)}
-                      </span>
-                    );
-
-                  return (
+                  <div className="hub-segmented">
                     <button
                       type="button"
-                      key={`${skill.sourceId}:${skill.id}`}
-                      className={`skill-list-row ${active ? "skill-list-row-active" : ""}`}
-                      onClick={() =>
-                        setSelectedSkillIds((current) => ({
-                          ...current,
-                          [activeSection]: skill.id,
-                        }))
-                      }
+                      className={groupBy === "library" ? "hub-segmented-active" : ""}
+                      onClick={() => setGroupBy("library")}
                     >
-                      <div className="skill-list-top">
-                        <div>
-                          <h4 className="skill-list-title">{skill.name}</h4>
-                          <p className="skill-list-copy">{skill.shortDescription}</p>
-                        </div>
-                        {statusElement}
-                      </div>
-                      <div className="skill-list-meta">
-                        <span>{skill.sourceLabel}</span>
-                        <span>{formatDate(skill.updatedAt)}</span>
-                        <span>{skill.fileCount} files</span>
-                        {skill.version ? <span>v{skill.version}</span> : null}
-                      </div>
+                      按层级
                     </button>
-                  );
-                })}
-                {pagedSkills.length === 0 ? (
-                  <div className="empty-state">
-                    <LibraryBig size={28} />
-                    <p>没有匹配到技能，换个关键词试试。</p>
+                    <button
+                      type="button"
+                      className={groupBy === "source" ? "hub-segmented-active" : ""}
+                      onClick={() => setGroupBy("source")}
+                    >
+                      按来源
+                    </button>
+                    <button
+                      type="button"
+                      className={groupBy === "flat" ? "hub-segmented-active" : ""}
+                      onClick={() => setGroupBy("flat")}
+                    >
+                      平铺
+                    </button>
                   </div>
-                ) : null}
-              </div>
-
-              <Pagination
-                page={safePage}
-                totalPages={totalPages}
-                onPrev={() =>
-                  setPageBySection((current) => ({
-                    ...current,
-                    [activeSection]: Math.max(safePage - 1, 1),
-                  }))
-                }
-                onNext={() =>
-                  setPageBySection((current) => ({
-                    ...current,
-                    [activeSection]: Math.min(safePage + 1, totalPages),
-                  }))
-                }
-              />
-            </article>
-
-            <article className="surface-card preview-panel">
-              {selectedSkill ? (
-                <>
-                  <div className="surface-head">
-                    <div className="preview-header-block">
-                      <div className="preview-title-row">
-                        <p className="mini-eyebrow">{selectedSkill.sourceLabel}</p>
-                        {selectedSkill.homepage ? (
-                          <a
-                            className="inline-link"
-                            href={selectedSkill.homepage}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            官网 <ArrowUpRight size={14} />
-                          </a>
-                        ) : null}
-                      </div>
-                      <h3 className="preview-title">{selectedSkill.name}</h3>
-                      <p className="preview-copy">{selectedSkill.description}</p>
-                    </div>
-                    {selectedSkill.locationType === "library" ? (
-                      <div className="action-row-wrap preview-actions">
-                        <ActionButton
-                          label="移除本地"
-                          icon={<Trash2 size={16} />}
-                          busy={
-                            busyKey ===
-                            `remove:${selectedSkill.sourceId}:${selectedSkill.id}`
-                          }
-                          onClick={() =>
-                            runAction(
-                              "/api/actions/remove-library",
-                              {
-                                skillId: selectedSkill.id,
-                                libraryId: selectedSkill.sourceId,
-                              },
-                              `remove:${selectedSkill.sourceId}:${selectedSkill.id}`,
-                              {
-                                confirmMessage: `确认从 ${selectedSkill.sourceLabel} 删除 ${selectedSkill.name} 吗？`,
-                              },
-                            )
-                          }
-                          tone="danger"
-                        />
-                      </div>
-                    ) : (
-                      <div className="action-row-wrap preview-actions">
-                        <ActionButton
-                          label="删除云端镜像"
-                          icon={<Trash2 size={16} />}
-                          busy={busyKey === `delete-catalog:${selectedSkill.id}`}
-                          onClick={() =>
-                            runAction(
-                              "/api/actions/delete-catalog",
-                              {
-                                skillId: selectedSkill.id,
-                              },
-                              `delete-catalog:${selectedSkill.id}`,
-                              {
-                                confirmMessage: `确认从 Catalog 删除 ${selectedSkill.name} 吗？`,
-                              },
-                            )
-                          }
-                          tone="danger"
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="meta-chip-row">
-                    <span className="status-pill status-pill-subtle">
-                      {selectedSkill.locationType === "catalog"
-                        ? "云端镜像"
-                        : workspaceStatusLabel(selectedSkill.catalogStatus)}
-                    </span>
-                    <span className="status-pill status-pill-subtle">
-                      {selectedSkill.fileCount} files
-                    </span>
-                    <span className="status-pill status-pill-subtle">
-                      {formatBytes(selectedSkill.sizeBytes)}
-                    </span>
-                    <span className="status-pill status-pill-subtle">
-                      更新于 {formatDate(selectedSkill.updatedAt)}
-                    </span>
-                    {selectedSkill.version ? (
-                      <span className="status-pill status-pill-subtle">
-                        v{selectedSkill.version}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {selectedSkill.locationType === "library" ? (
-                    <div className="install-stack">
-                      <div className="install-item">
-                        <div>
-                          <div className="install-item-title">
-                            <span>云端镜像</span>
-                            <span
-                              className={`status-pill ${
-                                selectedSkill.catalogStatus === "synced"
-                                  ? "status-pill-good"
-                                  : selectedSkill.catalogStatus === "changed"
-                                    ? "status-pill-warn"
-                                    : "status-pill-plain"
-                              }`}
-                            >
-                              {workspaceStatusLabel(selectedSkill.catalogStatus)}
-                            </span>
-                          </div>
-                          <p className="caption-text">
-                            {selectedCatalogSkill?.path ??
-                              "当前远端镜像里还没有这个 skill。"}
-                          </p>
-                        </div>
-                        <ActionButton
-                          label={
-                            selectedSkill.catalogStatus === "missing"
-                              ? "同步"
-                              : selectedSkill.catalogStatus === "changed"
-                                ? "更新镜像"
-                                : "重传镜像"
-                          }
-                          icon={<Upload size={16} />}
-                          busy={
-                            busyKey ===
-                            `import:${selectedSkill.sourceId}:${selectedSkill.id}`
-                          }
-                          onClick={() =>
-                            runAction(
-                              "/api/actions/import",
-                              {
-                                skillId: selectedSkill.id,
-                                libraryId: selectedSkill.sourceId,
-                              },
-                              `import:${selectedSkill.sourceId}:${selectedSkill.id}`,
-                            )
-                          }
-                          tone={
-                            selectedSkill.catalogStatus === "synced"
-                              ? "ghost"
-                              : "secondary"
-                          }
-                          size="compact"
-                        />
-                      </div>
-
-                      {selectedLibrarySyncTargets.map(({ library, installedSkill }) => (
-                        <div className="install-item" key={library.id}>
-                          <div>
-                            <div className="install-item-title">
-                              <span>{library.label}</span>
-                              <span
-                                className={`status-pill ${
-                                  !installedSkill
-                                    ? "status-pill-plain"
-                                    : installedSkill.hash === selectedSkill.hash
-                                      ? "status-pill-good"
-                                      : "status-pill-warn"
-                                }`}
-                              >
-                                {!installedSkill
-                                  ? "未安装"
-                                  : installedSkill.hash === selectedSkill.hash
-                                    ? "已一致"
-                                    : "有差异"}
-                              </span>
-                            </div>
-                            <p className="caption-text">
-                              {installedSkill?.path ??
-                                `将同步到 ${library.path}/${selectedSkill.id}`}
-                            </p>
-                          </div>
-                          <ActionButton
-                            label={
-                              !installedSkill
-                                ? "同步过去"
-                                : installedSkill.hash === selectedSkill.hash
-                                  ? "覆盖同步"
-                                  : "更新为当前版本"
-                            }
-                            icon={<ArrowRightLeft size={16} />}
-                            busy={
-                              busyKey ===
-                              `sync-library:${selectedSkill.sourceId}:${library.id}:${selectedSkill.id}`
-                            }
-                            onClick={() =>
-                              runAction(
-                                "/api/actions/sync-library",
-                                {
-                                  skillId: selectedSkill.id,
-                                  sourceLibraryId: selectedSkill.sourceId,
-                                  targetLibraryId: library.id,
-                                },
-                                `sync-library:${selectedSkill.sourceId}:${library.id}:${selectedSkill.id}`,
-                              )
-                            }
-                            tone={
-                              installedSkill && installedSkill.hash === selectedSkill.hash
-                                ? "ghost"
-                                : "secondary"
-                            }
-                            size="compact"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {selectedSkill.locationType === "catalog" ? (
-                    <div className="install-stack">
-                      {selectedSkill.installations.map((installation) => (
-                        <div className="install-item" key={installation.libraryId}>
-                          <div>
-                            <div className="install-item-title">
-                              <span>{installation.libraryLabel}</span>
-                              <span
-                                className={`status-pill ${installationStatusTone(
-                                  installation.status,
-                                )}`}
-                              >
-                                {installationStatusLabel(installation.status)}
-                              </span>
-                            </div>
-                            <p className="caption-text">{installation.targetPath}</p>
-                          </div>
-                          <ActionButton
-                            label={
-                              installation.status === "missing"
-                                ? "同步到本地"
-                                : installation.status === "update-available"
-                                  ? "更新本地"
-                                  : "覆盖同步"
-                            }
-                            icon={<CloudDownload size={16} />}
-                            busy={
-                              busyKey ===
-                              `install:${selectedSkill.id}:${installation.libraryId}`
-                            }
-                            onClick={() =>
-                              runAction(
-                                "/api/actions/install",
-                                {
-                                  skillId: selectedSkill.id,
-                                  libraryId: installation.libraryId,
-                                },
-                                `install:${selectedSkill.id}:${installation.libraryId}`,
-                              )
-                            }
-                            tone={
-                              installation.status === "installed" ? "ghost" : "secondary"
-                            }
-                            size="compact"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="preview-tab-row">
-                    {(
-                      [
-                        { key: "overview", label: "概览", icon: LayoutPanelTop },
-                        { key: "skill", label: "SKILL.md", icon: Bot },
-                        { key: "readme", label: "README", icon: FileCode2 },
-                        { key: "files", label: "文件", icon: Files },
-                        { key: "package", label: "package", icon: FileJson2 },
-                        { key: "manifest", label: "manifest", icon: CheckCircle2 },
-                      ] satisfies Array<{
-                        key: PreviewTab;
-                        label: string;
-                        icon: typeof LayoutPanelTop;
-                      }>
-                    )
-                      .filter((tab) => {
-                        if (tab.key === "readme") {
-                          return Boolean(selectedDetail?.readmeMarkdown);
-                        }
-
-                        if (tab.key === "package") {
-                          return Boolean(selectedDetail?.packageJson);
-                        }
-
-                        if (tab.key === "manifest") {
-                          return Boolean(selectedDetail?.manifest);
-                        }
-
-                        return true;
-                      })
-                      .map((tab) => {
-                        const Icon = tab.icon;
-
-                        return (
-                          <button
-                            type="button"
-                            key={tab.key}
-                            className={`preview-tab ${previewTab === tab.key ? "preview-tab-active" : ""}`}
-                            onClick={() => setPreviewTab(tab.key)}
-                          >
-                            <Icon size={14} />
-                            <span>{tab.label}</span>
-                          </button>
-                        );
-                      })}
-                  </div>
-
-                  {detailLoadingKey === detailCacheKey ? (
-                    <div className="empty-state">
-                      <RefreshCw size={24} className="spin" />
-                      <p>正在加载预览内容…</p>
-                    </div>
-                  ) : null}
-
-                  {selectedDetail ? (
-                    <div className="preview-body">
-                      {previewTab === "overview" ? (
-                        <>
-                          <div className="info-grid">
-                            <div className="info-pill">
-                              <FolderCog size={16} />
-                              <span>{selectedDetail.skill.path}</span>
-                            </div>
-                            <div className="info-pill">
-                              <Blocks size={16} />
-                              <span>{selectedDetail.totalFiles} 个文件</span>
-                            </div>
-                            <div className="info-pill">
-                              <LibraryBig size={16} />
-                              <span>{selectedDetail.skill.sourceLabel}</span>
-                            </div>
-                          </div>
-
-                          <div className="overview-dual">
-                            <div className="surface-subcard">
-                              <h4 className="subcard-title">说明预览</h4>
-                              <MarkdownPanel
-                                content={
-                                  selectedDetail.readmeMarkdown ||
-                                  selectedDetail.skillMarkdown
-                                }
-                              />
-                            </div>
-                            <div className="surface-subcard">
-                              <h4 className="subcard-title">Frontmatter</h4>
-                              <JsonPanel value={selectedDetail.frontmatter} />
-                            </div>
-                          </div>
-                        </>
-                      ) : null}
-
-                      {previewTab === "skill" ? (
-                        <MarkdownPanel content={selectedDetail.skillMarkdown} />
-                      ) : null}
-
-                      {previewTab === "readme" ? (
-                        <MarkdownPanel content={selectedDetail.readmeMarkdown} />
-                      ) : null}
-
-                      {previewTab === "package" ? (
-                        <JsonPanel value={selectedDetail.packageJson} />
-                      ) : null}
-
-                      {previewTab === "manifest" ? (
-                        <JsonPanel
-                          value={
-                            selectedDetail.manifest as unknown as Record<string, unknown>
-                          }
-                        />
-                      ) : null}
-
-                      {previewTab === "files" ? (
-                        <div className="file-list">
-                          {selectedDetail.files.map((file) => (
-                            <div className="file-item" key={file.path}>
-                              <span>{file.path}</span>
-                              <span>{formatBytes(file.sizeBytes)}</span>
-                            </div>
-                          ))}
-                          {selectedDetail.totalFiles > selectedDetail.files.length ? (
-                            <p className="caption-text">
-                              仅展示前 {selectedDetail.files.length} 个文件，实际共{" "}
-                              {selectedDetail.totalFiles} 个。
-                            </p>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="empty-state">
-                  <LibraryBig size={28} />
-                  <p>选择一个 skill 之后，这里会展示预览和操作面板。</p>
                 </div>
-              )}
-            </article>
+
+                <GroupedSkillGrid
+                  groups={groupedSkills}
+                  selectedKey={selectedSkill?.key}
+                  onSelect={(skill) => {
+                    setSelectedSkill(skill);
+                    setDetailTab("overview");
+                  }}
+                />
+              </>
+            ) : null}
+
+            {activeView === "similar" ? (
+              <section className="hub-panel-view">
+                <div className="hub-panel-head">
+                  <div>
+                    <p>Similar Skills</p>
+                    <h2>相似 / 重复检测</h2>
+                  </div>
+                  <Radar size={24} />
+                </div>
+                {duplicateGroups.length === 0 ? (
+                  <div className="hub-empty-state">
+                    <CheckCircle2 size={28} />
+                    <p>当前没有发现同名 skill。</p>
+                  </div>
+                ) : (
+                  <div className="hub-duplicate-list">
+                    {duplicateGroups.map((group) => (
+                      <article className="hub-duplicate-card" key={group.id}>
+                        <div className="hub-group-title">
+                          <h2>/{group.label}</h2>
+                          <span>{group.skills.length}</span>
+                          <div />
+                        </div>
+                        <div className="hub-skill-grid">
+                          {group.skills.map((skill) => (
+                            <SkillCard
+                              key={skill.key}
+                              skill={skill}
+                              selected={selectedSkill?.key === skill.key}
+                              onClick={() => setSelectedSkill(skill)}
+                            />
+                          ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+            ) : null}
+
+            {activeView === "dashboard" ? (
+              <section className="hub-panel-view">
+                <div className="hub-panel-head">
+                  <div>
+                    <p>Dashboard</p>
+                    <h2>技能库仪表盘</h2>
+                  </div>
+                  <LayoutDashboard size={24} />
+                </div>
+                <div className="hub-library-grid">
+                  {data.librarySummaries.map((library) => (
+                    <LibrarySummaryCard key={library.id} library={library} />
+                  ))}
+                </div>
+                <div className="hub-git-card">
+                  <div>
+                    <p>GitHub 同步</p>
+                    <strong>{data.git.branch ?? data.config.catalog.defaultBranch}</strong>
+                    <span>{data.git.remote ?? data.config.catalog.remoteRepoUrl}</span>
+                  </div>
+                  <span className={`hub-mini-badge ${data.git.clean ? "hub-badge-good" : "hub-badge-warn"}`}>
+                    {data.git.clean ? "工作区干净" : `${data.git.dirtyFiles.length} 个改动`}
+                  </span>
+                </div>
+              </section>
+            ) : null}
+
+            {activeView === "sync" ? (
+              <section className="hub-panel-view">
+                <div className="hub-panel-head">
+                  <div>
+                    <p>Sync</p>
+                    <h2>同步与更新检查</h2>
+                  </div>
+                  <div className="hub-sync-actions">
+                    <ActionButton
+                      label="检查远端"
+                      icon={<RefreshCw size={16} />}
+                      busy={busyKey === "sync-fetch"}
+                      onClick={() =>
+                        runAction("/api/actions/sync", { action: "fetch" }, "sync-fetch")
+                      }
+                      tone="ghost"
+                      size="compact"
+                    />
+                    <ActionButton
+                      label="拉取"
+                      icon={<CloudDownload size={16} />}
+                      busy={busyKey === "sync-pull"}
+                      onClick={() =>
+                        runAction("/api/actions/sync", { action: "pull" }, "sync-pull")
+                      }
+                      tone="secondary"
+                      size="compact"
+                    />
+                    <ActionButton
+                      label="推送"
+                      icon={<CloudUpload size={16} />}
+                      busy={busyKey === "sync-push"}
+                      onClick={() =>
+                        runAction("/api/actions/sync", { action: "push" }, "sync-push")
+                      }
+                      size="compact"
+                    />
+                  </div>
+                </div>
+
+                <div className="hub-sync-list">
+                  {syncRows.map((row) => (
+                    <article className="hub-sync-row" key={row.id}>
+                      <div className="hub-sync-row-head">
+                        <div>
+                          <h3>/{row.name}</h3>
+                          <p>{row.description}</p>
+                        </div>
+                        <span className={`hub-mini-badge ${syncRowTone(row.status)}`}>
+                          {syncRowLabel(row.status)}
+                        </span>
+                      </div>
+                      <div className="hub-sync-chips">
+                        {row.locations.map((location) => (
+                          <span
+                            className={`hub-sync-chip ${syncCellTone(location.state)}`}
+                            key={`${row.id}:${location.locationId}`}
+                          >
+                            {location.locationLabel} · {syncCellLabel(location.state)}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="hub-sync-tip">{row.recommendation}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            {activeView === "trash" ? (
+              <section className="hub-panel-view">
+                <div className="hub-panel-head">
+                  <div>
+                    <p>Trash</p>
+                    <h2>回收站</h2>
+                  </div>
+                  <Trash2 size={24} />
+                </div>
+                <div className="hub-empty-state">
+                  <Trash2 size={28} />
+                  <p>
+                    回收站后端还没接入。下一步会参考 Skill Hub 的 7 天恢复机制，把删除从硬删除改成可恢复。
+                  </p>
+                </div>
+              </section>
+            ) : null}
           </section>
-          )}
-        </section>
+        </div>
       </section>
+
+      {selectedSkill ? (
+        <div className="hub-modal-backdrop" onClick={() => setSelectedSkill(null)}>
+          <aside className="hub-detail-drawer" onClick={(event) => event.stopPropagation()}>
+            <div className="hub-detail-head">
+              <div>
+                <p>
+                  {selectedSkill.agentIcon} {selectedSkill.agentLabel}
+                </p>
+                <h2>/{selectedSkill.name}</h2>
+                <span>{selectedSkill.description}</span>
+              </div>
+              <button
+                type="button"
+                className="hub-icon-button"
+                onClick={() => setSelectedSkill(null)}
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="hub-detail-meta">
+              <span className={`hub-mini-badge ${statusClass(selectedSkill.statusTone)}`}>
+                {selectedSkill.statusLabel}
+              </span>
+              <span>{selectedSkill.fileCount} files</span>
+              <span>{formatBytes(selectedSkill.sizeBytes)}</span>
+              <span>{new Intl.DateTimeFormat("zh-CN", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(new Date(selectedSkill.updatedAt))}</span>
+            </div>
+
+            <div className="hub-detail-actions">
+              {selectedWorkspaceSkill ? (
+                <>
+                  <ActionButton
+                    label={
+                      selectedWorkspaceSkill.catalogStatus === "missing"
+                        ? "备份到云端"
+                        : selectedWorkspaceSkill.catalogStatus === "changed"
+                          ? "更新云端"
+                          : "重传备份"
+                    }
+                    icon={<CloudUpload size={16} />}
+                    busy={busyKey === `import:${selectedWorkspaceSkill.sourceId}:${selectedWorkspaceSkill.id}`}
+                    onClick={() =>
+                      runAction(
+                        "/api/actions/import",
+                        {
+                          skillId: selectedWorkspaceSkill.id,
+                          libraryId: selectedWorkspaceSkill.sourceId,
+                        },
+                        `import:${selectedWorkspaceSkill.sourceId}:${selectedWorkspaceSkill.id}`,
+                      )
+                    }
+                    size="compact"
+                  />
+                  <ActionButton
+                    label="移除本地"
+                    icon={<Trash2 size={16} />}
+                    busy={busyKey === `remove:${selectedWorkspaceSkill.sourceId}:${selectedWorkspaceSkill.id}`}
+                    onClick={() =>
+                      runAction(
+                        "/api/actions/remove-library",
+                        {
+                          skillId: selectedWorkspaceSkill.id,
+                          libraryId: selectedWorkspaceSkill.sourceId,
+                        },
+                        `remove:${selectedWorkspaceSkill.sourceId}:${selectedWorkspaceSkill.id}`,
+                        {
+                          confirmMessage: `确认从 ${selectedWorkspaceSkill.sourceLabel} 删除 ${selectedWorkspaceSkill.name} 吗？`,
+                        },
+                      )
+                    }
+                    tone="danger"
+                    size="compact"
+                  />
+                </>
+              ) : null}
+
+              {selectedCatalogRecord ? (
+                <ActionButton
+                  label="删除云端镜像"
+                  icon={<Trash2 size={16} />}
+                  busy={busyKey === `delete-catalog:${selectedCatalogRecord.id}`}
+                  onClick={() =>
+                    runAction(
+                      "/api/actions/delete-catalog",
+                      { skillId: selectedCatalogRecord.id },
+                      `delete-catalog:${selectedCatalogRecord.id}`,
+                      {
+                        confirmMessage: `确认从云端镜像删除 ${selectedCatalogRecord.name} 吗？`,
+                      },
+                    )
+                  }
+                  tone="danger"
+                  size="compact"
+                />
+              ) : null}
+            </div>
+
+            {selectedWorkspaceSkill ? (
+              <div className="hub-install-stack">
+                <div className="hub-install-row">
+                  <div>
+                    <strong>云端镜像</strong>
+                    <span>{selectedCatalogSkill?.path ?? "当前远端镜像里还没有这个 skill。"}</span>
+                  </div>
+                  <span className={`hub-mini-badge ${statusClass(workspaceStatus(selectedWorkspaceSkill).tone)}`}>
+                    {workspaceStatus(selectedWorkspaceSkill).label}
+                  </span>
+                </div>
+                {selectedLibrarySyncTargets.map(({ library, installedSkill }) => (
+                  <div className="hub-install-row" key={library.id}>
+                    <div>
+                      <strong>{library.label}</strong>
+                      <span>{installedSkill?.path ?? `将同步到 ${library.path}/${selectedWorkspaceSkill.id}`}</span>
+                    </div>
+                    <ActionButton
+                      label={!installedSkill ? "同步过去" : "覆盖同步"}
+                      icon={<ArrowRightLeft size={16} />}
+                      busy={busyKey === `sync-library:${selectedWorkspaceSkill.sourceId}:${library.id}:${selectedWorkspaceSkill.id}`}
+                      onClick={() =>
+                        runAction(
+                          "/api/actions/sync-library",
+                          {
+                            skillId: selectedWorkspaceSkill.id,
+                            sourceLibraryId: selectedWorkspaceSkill.sourceId,
+                            targetLibraryId: library.id,
+                          },
+                          `sync-library:${selectedWorkspaceSkill.sourceId}:${library.id}:${selectedWorkspaceSkill.id}`,
+                        )
+                      }
+                      tone="secondary"
+                      size="compact"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {selectedCatalogRecord ? (
+              <div className="hub-install-stack">
+                {selectedCatalogRecord.installations.map((installation) => (
+                  <div className="hub-install-row" key={installation.libraryId}>
+                    <div>
+                      <strong>{installation.libraryLabel}</strong>
+                      <span>{installation.targetPath}</span>
+                    </div>
+                    <ActionButton
+                      label={
+                        installation.status === "missing"
+                          ? "同步到本地"
+                          : installation.status === "update-available"
+                            ? "更新本地"
+                            : "覆盖同步"
+                      }
+                      icon={<CloudDownload size={16} />}
+                      busy={busyKey === `install:${selectedCatalogRecord.id}:${installation.libraryId}`}
+                      onClick={() =>
+                        runAction(
+                          "/api/actions/install",
+                          {
+                            skillId: selectedCatalogRecord.id,
+                            libraryId: installation.libraryId,
+                          },
+                          `install:${selectedCatalogRecord.id}:${installation.libraryId}`,
+                        )
+                      }
+                      tone={installation.status === "installed" ? "ghost" : "secondary"}
+                      size="compact"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="hub-detail-tabs">
+              {(
+                [
+                  { key: "overview", label: "概览", icon: Blocks },
+                  { key: "skill", label: "SKILL.md", icon: Bot },
+                  { key: "readme", label: "README", icon: FileCode2 },
+                  { key: "files", label: "文件", icon: Files },
+                  { key: "package", label: "package", icon: FileJson2 },
+                  { key: "manifest", label: "manifest", icon: CheckCircle2 },
+                ] satisfies Array<{
+                  key: DetailTab;
+                  label: string;
+                  icon: typeof Blocks;
+                }>
+              ).map((tab) => {
+                const Icon = tab.icon;
+
+                return (
+                  <button
+                    type="button"
+                    key={tab.key}
+                    className={detailTab === tab.key ? "hub-detail-tab-active" : ""}
+                    onClick={() => setDetailTab(tab.key)}
+                  >
+                    <Icon size={14} />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="hub-detail-body">
+              {detailLoadingKey === detailCacheKey ? (
+                <div className="hub-empty-state">
+                  <RefreshCw size={24} className="spin" />
+                  <p>正在加载预览内容…</p>
+                </div>
+              ) : null}
+
+              {selectedDetail && detailTab === "overview" ? (
+                <>
+                  <div className="hub-info-grid">
+                    <span>
+                      <GitBranch size={15} /> {selectedDetail.skill.sourceLabel}
+                    </span>
+                    <span>
+                      <Files size={15} /> {selectedDetail.totalFiles} 个文件
+                    </span>
+                    <span>{selectedDetail.skill.path}</span>
+                  </div>
+                  <MarkdownPanel
+                    content={selectedDetail.readmeMarkdown ?? selectedDetail.skillMarkdown}
+                  />
+                </>
+              ) : null}
+
+              {selectedDetail && detailTab === "skill" ? (
+                <MarkdownPanel content={selectedDetail.skillMarkdown} />
+              ) : null}
+
+              {selectedDetail && detailTab === "readme" ? (
+                <MarkdownPanel content={selectedDetail.readmeMarkdown} />
+              ) : null}
+
+              {selectedDetail && detailTab === "package" ? (
+                <JsonPanel value={selectedDetail.packageJson} />
+              ) : null}
+
+              {selectedDetail && detailTab === "manifest" ? (
+                <JsonPanel
+                  value={selectedDetail.manifest as unknown as Record<string, unknown>}
+                />
+              ) : null}
+
+              {selectedDetail && detailTab === "files" ? (
+                <div className="hub-file-list">
+                  {selectedDetail.files.map((file) => (
+                    <div key={file.path}>
+                      <span>{file.path}</span>
+                      <strong>{formatBytes(file.sizeBytes)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </main>
   );
 }
