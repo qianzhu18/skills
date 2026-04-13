@@ -34,4 +34,4 @@
 - Codex: 19 skills
 - 索引生成时间见 `index.json`
 
-Web 管理器代码已移到 `codex/web-manager` 分支，`main` 只作为 skills 托管分支使用。
+Web 管理器代码已从 `main` 移除；本机保留了一个 `codex/web-manager` 保护分支用于必要时恢复，`main` 只作为 skills 托管分支使用。
