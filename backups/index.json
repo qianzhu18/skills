@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-04-13T12:37:59.673Z",
-  "note": "Backups exclude dependency caches and generated build output such as node_modules, .venv, dist, build, .next, .git, __pycache__, and .DS_Store.",
+  "generatedAt": "2026-04-13T12:42:16.298Z",
+  "note": "Backups dereference valid symlinks and exclude dependency caches and generated build output such as node_modules, .venv, dist, build, .next, .git, __pycache__, and .DS_Store. Broken source symlinks are recorded in backups/broken-symlinks.json.",
   "sources": [
     {
       "id": "claude-code",
       "label": "Claude Code Skills",
       "sourcePath": "/Users/mac/.claude/skills",
       "backupPath": "backups/claude-code",
-      "skillCount": 36,
+      "skillCount": 54,
       "skills": [
         {
           "id": "skill-creator",
@@ -154,12 +154,60 @@
           "hash": "f4cc2044b5c831476dc489acc789ce8ef03167768ba16f17a5f11d692052a48f"
         },
         {
+          "id": "browse",
+          "relativePath": "browse",
+          "fileCount": 40,
+          "sizeBytes": 337313,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "c4571a1f14ba8822ea5541c5d08a1c791cf56359371afc84998355b41120766f"
+        },
+        {
+          "id": "debug",
+          "relativePath": "debug",
+          "fileCount": 2,
+          "sizeBytes": 19444,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "2c61c6e3bf4039a14d9cd165c402f84ed6242f2e49dac7ff6ec176026b6d6114"
+        },
+        {
+          "id": "design-consultation",
+          "relativePath": "design-consultation",
+          "fileCount": 2,
+          "sizeBytes": 45647,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "936a0956f09d790e778d1d043ef9c21e43a3d1be30804410cb01a07d47394350"
+        },
+        {
+          "id": "design-review",
+          "relativePath": "design-review",
+          "fileCount": 2,
+          "sizeBytes": 48912,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "0648771b8ec32226a4a9a8f3c7b4694cf5759a5407f03db5c9c0aff75b74eab1"
+        },
+        {
+          "id": "document-release",
+          "relativePath": "document-release",
+          "fileCount": 2,
+          "sizeBytes": 36351,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "271ead2388c4cdf7d3cbc5826af8eefbe8cc5bbbf7f5ad48703d752776f8d4c4"
+        },
+        {
           "id": "gstack",
           "relativePath": "gstack",
           "fileCount": 134,
           "sizeBytes": 1798055,
           "updatedAt": "2026-03-18T16:37:53.000Z",
           "hash": "96651e7f68710cac8b6fde7491f6e87db1d3e425651c242a084682d29f9b8511"
+        },
+        {
+          "id": "gstack-upgrade",
+          "relativePath": "gstack-upgrade",
+          "fileCount": 2,
+          "sizeBytes": 15972,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "3c2b509aaa5d8f2b69a8d4fed090bad0d22f0677a5ee83265099ff8175aa8e94"
         },
         {
           "id": "json-canvas",
@@ -210,6 +258,14 @@
           "hash": "14beaa53118bcbc14bcdb6ae0de7adcc9e44cf7c969cf2ac61105246acaf8ad2"
         },
         {
+          "id": "office-hours",
+          "relativePath": "office-hours",
+          "fileCount": 2,
+          "sizeBytes": 58314,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "5aba3d130fc21b132395fd9f742950a99a4979ae56506946f7ab87be80d22203"
+        },
+        {
           "id": "opencli-skill",
           "relativePath": "opencli-skill",
           "fileCount": 2,
@@ -226,6 +282,30 @@
           "hash": "d6d381e518a4694b7292eef5fd15fc9541d41f7e0b52eb2d9f9b16dbd22bde1a"
         },
         {
+          "id": "plan-ceo-review",
+          "relativePath": "plan-ceo-review",
+          "fileCount": 2,
+          "sizeBytes": 111665,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "d57b930dbbe351013a17efad7a395bc4b803b029da23649fa81698b94adc5e92"
+        },
+        {
+          "id": "plan-design-review",
+          "relativePath": "plan-design-review",
+          "fileCount": 2,
+          "sizeBytes": 44503,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "a1faf69b5d8c80c25df9f6fa69bfa410250b8dd11b691eb6bc6c812a39186e4f"
+        },
+        {
+          "id": "plan-eng-review",
+          "relativePath": "plan-eng-review",
+          "fileCount": 2,
+          "sizeBytes": 45308,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "599f4b75d80d21906802532dbe9dd0eb482338075431c42b2ced07eaa77390f5"
+        },
+        {
           "id": "pm-req-devspec",
           "relativePath": "pm-req-devspec",
           "fileCount": 6,
@@ -240,6 +320,22 @@
           "sizeBytes": 7170,
           "updatedAt": "2026-01-22T21:50:23.000Z",
           "hash": "08c2132adfbd2159b560a51e0ec1a5d533bf3e3c9f9962670bff734a8071c0f1"
+        },
+        {
+          "id": "qa",
+          "relativePath": "qa",
+          "fileCount": 4,
+          "sizeBytes": 54038,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "404b18c66eb310b595417e621b48a01fb1166f3c03f57a604a2e99cce182fc16"
+        },
+        {
+          "id": "qa-only",
+          "relativePath": "qa-only",
+          "fileCount": 2,
+          "sizeBytes": 26536,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "05dae9f8173760cf3d0686dba0ed54e2b413f5836b69d6f4b2a33c52376659ea"
         },
         {
           "id": "qianzhu-longform-writer",
@@ -266,12 +362,52 @@
           "hash": "45aef4b92a1081ebfded322451842fb49db2c0663828fccbf67aec719cbba804"
         },
         {
+          "id": "retro",
+          "relativePath": "retro",
+          "fileCount": 2,
+          "sizeBytes": 50638,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "c485fd81745dff9216049033b1c77be8ac842200a7febf8cbf3f3cc6167ac605"
+        },
+        {
+          "id": "review",
+          "relativePath": "review",
+          "fileCount": 6,
+          "sizeBytes": 57982,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "13d55361349655181257b1d539094c279e84f6957acaa183edc4be4b6c05f953"
+        },
+        {
+          "id": "setup-browser-cookies",
+          "relativePath": "setup-browser-cookies",
+          "fileCount": 2,
+          "sizeBytes": 12969,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "6a8245adec53b40d1a4a0d19b8ed79a238ab56a7b52eb30e06944c84bab60346"
+        },
+        {
+          "id": "ship",
+          "relativePath": "ship",
+          "fileCount": 2,
+          "sizeBytes": 78939,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "7ca78150a29cffd7892be778eb2c109713c6fe6a7029af6e6508b199d92ebd73"
+        },
+        {
           "id": "skill-creator",
           "relativePath": "skill-creator",
           "fileCount": 19,
           "sizeBytes": 242841,
           "updatedAt": "2026-03-13T03:42:08.000Z",
           "hash": "5781b2be70748ff30130195f4928c0e3e8b7432b31dd6fefe4ee13da4e43aac4"
+        },
+        {
+          "id": "smart-illustrator",
+          "relativePath": "smart-illustrator",
+          "fileCount": 23,
+          "sizeBytes": 5452476,
+          "updatedAt": "2026-04-08T17:42:33.000Z",
+          "hash": "cb4ba13022213ea26bc9c53d6f1f98e6b712faca5bde240ceff0ce4222c59250"
         },
         {
           "id": "web-access",
@@ -288,6 +424,14 @@
           "sizeBytes": 22210,
           "updatedAt": "2026-02-13T14:03:44.000Z",
           "hash": "9126b37c42f3f6b5d84317f818410398bd475eab6a0280b443dcfe3738c34b7a"
+        },
+        {
+          "id": "x-ai-topic-selector",
+          "relativePath": "x-ai-topic-selector",
+          "fileCount": 20,
+          "sizeBytes": 1644325,
+          "updatedAt": "2026-03-25T15:15:30.000Z",
+          "hash": "cc34f1ed7b7125e3fd3e04aa9bd1f8b9512e2ceae88d28cc900cd38f87bc1589"
         },
         {
           "id": "x-article-publisher",

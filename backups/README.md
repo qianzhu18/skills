@@ -26,4 +26,6 @@ The backup intentionally excludes dependency caches and generated artifacts:
 - `.next/`
 - `.DS_Store`
 
+Valid symlinks are dereferenced during backup so the GitHub copy stays portable. Broken source symlinks are not copied; they are recorded in `broken-symlinks.json`.
+
 These exclusions keep the GitHub repository usable while preserving the skill source files needed for management, search, preview, and restoration.

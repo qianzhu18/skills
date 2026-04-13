@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-04-13T12:41:52Z",
+  "note": "These source symlinks were present in the local skills directory but their targets did not exist at backup time, so they were not copied into the portable backup.",
+  "links": [
+    {
+      "source": "/Users/mac/.claude/skills/wechat-publish-control",
+      "target": "/Users/mac/.codex/skills/wechat-publish-control"
+    },
+    {
+      "source": "/Users/mac/.claude/skills/wechat-topic-radar",
+      "target": "/Users/mac/.codex/skills/wechat-topic-radar"
+    }
+  ]
+}
