@@ -3,9 +3,9 @@ import "./globals.css";
 import "./hub.css";
 
 export const metadata: Metadata = {
-  title: "Qianzhu Skill Store",
+  title: "千逐 Skill 管理器",
   description:
-    "A local-first skill manager for Claude, Codex, and agent skill libraries.",
+    "持续构建中 · Product × Systems × Community",
 };
 
 export default function RootLayout({

@@ -969,8 +969,14 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
       <section className="hub-shell">
         <header className="hub-header">
           <div className="hub-brand">
-            <div className="hub-logo">黄</div>
-            <strong>Skill 管理器</strong>
+            <div className="hub-logo">千</div>
+            <div className="hub-brand-copy">
+              <p className="hub-brand-kicker">
+                持续构建中 · Product × Systems × Community
+              </p>
+              <strong>千逐 Skill 管理器</strong>
+              <span>AI Product Builder · System Thinker · Community Connector</span>
+            </div>
           </div>
 
           <nav className="hub-top-tabs">
@@ -993,7 +999,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="搜索 Skills...（名称/描述）"
+                placeholder="搜索 Codex / Claude / Skills / Systems..."
               />
             </label>
             <button type="button" className="hub-icon-button" aria-label="Theme">
