@@ -1,0 +1,30 @@
+{
+  "catalog": {
+    "title": "Qianzhu Skill Store",
+    "description": "Scan local Claude/Codex/Agents skills, curate them into a portable store, and sync the catalog with GitHub.",
+    "remoteRepoUrl": "https://github.com/qianzhu18/skills",
+    "defaultBranch": "main",
+    "directory": "catalog/skills",
+    "indexFile": "catalog/index.json"
+  },
+  "libraries": [
+    {
+      "id": "claude",
+      "label": "Claude Skills",
+      "path": "/Users/mac/.claude/skills",
+      "description": "Personal Claude skill library."
+    },
+    {
+      "id": "codex",
+      "label": "Codex Skills",
+      "path": "/Users/mac/.codex/skills",
+      "description": "Codex local skill library."
+    },
+    {
+      "id": "agents",
+      "label": "Agents Skills",
+      "path": "/Users/mac/.agents/skills",
+      "description": "Shared agent skill library."
+    }
+  ]
+}
