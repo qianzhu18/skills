@@ -1,12 +1,12 @@
 {
   "generatedAt": "2026-04-13T12:42:16.298Z",
-  "note": "Backups dereference valid symlinks and exclude dependency caches and generated build output such as node_modules, .venv, dist, build, .next, .git, __pycache__, and .DS_Store. Broken source symlinks are recorded in backups/broken-symlinks.json.",
+  "note": "This main branch hosts skills only. Backups dereference valid symlinks and exclude dependency caches and generated build output such as node_modules, .venv, dist, build, .next, .git, __pycache__, and .DS_Store. Broken source symlinks are recorded in broken-symlinks.json.",
   "sources": [
     {
       "id": "claude-code",
       "label": "Claude Code Skills",
       "sourcePath": "/Users/mac/.claude/skills",
-      "backupPath": "backups/claude-code",
+      "backupPath": "claude-code",
       "skillCount": 54,
       "skills": [
         {
@@ -447,7 +447,7 @@
       "id": "codex",
       "label": "Codex Skills",
       "sourcePath": "/Users/mac/.codex/skills",
-      "backupPath": "backups/codex",
+      "backupPath": "codex",
       "skillCount": 19,
       "skills": [
         {
