@@ -11,6 +11,8 @@ import type {
   CatalogSkill,
   DashboardData,
   LibraryConfig,
+  LibrarySummary,
+  SkillDetail,
   SkillHubConfig,
   SkillRecord,
   WorkspaceSkill,
@@ -18,9 +20,9 @@ import type {
 
 const DEFAULT_CONFIG: SkillHubConfig = {
   catalog: {
-    title: "Qianzhu Skill Store",
+    title: "Qianzhu Skill Manager",
     description:
-      "Scan local Claude/Codex/Agents skills, curate them into a portable store, and sync the catalog with GitHub.",
+      "Manage Claude and Codex skills with a cleaner library view, preview pane, and GitHub-backed catalog.",
     remoteRepoUrl: "https://github.com/qianzhu18/skills",
     defaultBranch: "main",
     directory: "catalog/skills",
@@ -29,21 +31,21 @@ const DEFAULT_CONFIG: SkillHubConfig = {
   libraries: [
     {
       id: "claude",
-      label: "Claude Skills",
+      label: "Claude",
       path: path.join(os.homedir(), ".claude/skills"),
-      description: "Personal Claude skill library.",
+      description: "Claude Code 本地技能目录",
     },
     {
       id: "codex",
-      label: "Codex Skills",
+      label: "Codex",
       path: path.join(os.homedir(), ".codex/skills"),
-      description: "Codex local skill library.",
+      description: "Codex 本地技能目录",
     },
     {
       id: "agents",
-      label: "Agents Skills",
+      label: "Agents",
       path: path.join(os.homedir(), ".agents/skills"),
-      description: "Shared agent skill library.",
+      description: "共享 agent skills 目录",
     },
   ],
 };
@@ -55,6 +57,8 @@ const IGNORED_DIRECTORIES = new Set([
   "build",
   "node_modules",
 ]);
+
+const DETAIL_FILE_LIMIT = 120;
 
 async function pathExists(targetPath: string) {
   try {
@@ -88,6 +92,67 @@ function mergeConfig(input?: Partial<SkillHubConfig>): SkillHubConfig {
   };
 }
 
+function slugifyLibraryId(input: string) {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function normalizeLibrary(library: LibraryConfig, index: number): LibraryConfig {
+  const label = library.label.trim() || `Library ${index + 1}`;
+  const pathValue = library.path.trim();
+  const id =
+    slugifyLibraryId(library.id || label || path.basename(pathValue || "library")) ||
+    `library-${index + 1}`;
+
+  return {
+    id,
+    label,
+    path: pathValue,
+    description: library.description?.trim() || undefined,
+  };
+}
+
+function normalizeConfig(input: SkillHubConfig): SkillHubConfig {
+  const libraries = input.libraries
+    .map((library, index) => normalizeLibrary(library, index))
+    .filter((library) => library.path.length > 0);
+  const seenIds = new Set<string>();
+
+  const uniqueLibraries = libraries.map((library, index) => {
+    let nextId = library.id;
+
+    while (seenIds.has(nextId)) {
+      nextId = `${library.id}-${index + 1}`;
+    }
+
+    seenIds.add(nextId);
+
+    return {
+      ...library,
+      id: nextId,
+    };
+  });
+
+  return {
+    catalog: {
+      title: input.catalog.title.trim() || DEFAULT_CONFIG.catalog.title,
+      description:
+        input.catalog.description.trim() || DEFAULT_CONFIG.catalog.description,
+      remoteRepoUrl:
+        input.catalog.remoteRepoUrl.trim() || DEFAULT_CONFIG.catalog.remoteRepoUrl,
+      defaultBranch:
+        input.catalog.defaultBranch.trim() || DEFAULT_CONFIG.catalog.defaultBranch,
+      directory: input.catalog.directory.trim() || DEFAULT_CONFIG.catalog.directory,
+      indexFile: input.catalog.indexFile.trim() || DEFAULT_CONFIG.catalog.indexFile,
+    },
+    libraries: uniqueLibraries,
+  };
+}
+
 export async function loadSkillHubConfig() {
   const configPath = resolveFromRepo("skillhub.config.json");
 
@@ -96,7 +161,17 @@ export async function loadSkillHubConfig() {
   }
 
   const raw = await fs.readFile(configPath, "utf8");
-  return mergeConfig(JSON.parse(raw) as Partial<SkillHubConfig>);
+  return normalizeConfig(mergeConfig(JSON.parse(raw) as Partial<SkillHubConfig>));
+}
+
+export async function saveSkillHubConfig(input: SkillHubConfig) {
+  const config = normalizeConfig(input);
+  const configPath = resolveFromRepo("skillhub.config.json");
+
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  await ensureCatalogDirectories(config);
+
+  return getDashboardData();
 }
 
 async function ensureCatalogDirectories(config: SkillHubConfig) {
@@ -254,6 +329,24 @@ async function collectFilesRecursive(targetPath: string, bucket: string[] = []) 
   }
 
   return bucket;
+}
+
+async function collectRelativeFiles(targetPath: string) {
+  const files = await collectFilesRecursive(targetPath);
+
+  return Promise.all(
+    files
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, DETAIL_FILE_LIMIT)
+      .map(async (filePath) => {
+        const stat = await fs.stat(filePath);
+
+        return {
+          path: path.relative(targetPath, filePath),
+          sizeBytes: stat.size,
+        };
+      }),
+  );
 }
 
 async function collectDirectoryStats(targetPath: string) {
@@ -478,12 +571,14 @@ function buildWorkspaceSkills(
       if (!catalogSkill) {
         return {
           ...skill,
+          locationType: "library" as const,
           catalogStatus: "missing" as const,
         };
       }
 
       return {
         ...skill,
+        locationType: "library" as const,
         catalogStatus:
           catalogSkill.manifest?.importedFrom?.hash === skill.hash
             ? ("synced" as const)
@@ -543,6 +638,7 @@ function buildCatalogSkills(
 
       return {
         ...skill,
+        locationType: "catalog" as const,
         installations,
       };
     })
@@ -562,6 +658,35 @@ function buildCatalogSkills(
 
       return left.name.localeCompare(right.name);
     });
+}
+
+function buildLibrarySummaries(
+  libraries: LibraryConfig[],
+  workspaceSkills: WorkspaceSkill[],
+  catalogSkills: CatalogSkill[],
+): LibrarySummary[] {
+  return libraries.map((library) => {
+    const items = workspaceSkills.filter((skill) => skill.sourceId === library.id);
+    const updateAvailableCount = catalogSkills.filter((skill) =>
+      skill.installations.some(
+        (installation) =>
+          installation.libraryId === library.id &&
+          installation.status === "update-available",
+      ),
+    ).length;
+
+    return {
+      id: library.id,
+      label: library.label,
+      path: library.path,
+      description: library.description,
+      skillCount: items.length,
+      syncedCount: items.filter((skill) => skill.catalogStatus === "synced").length,
+      changedCount: items.filter((skill) => skill.catalogStatus === "changed").length,
+      missingCount: items.filter((skill) => skill.catalogStatus === "missing").length,
+      updateAvailableCount,
+    };
+  });
 }
 
 async function writeCatalogIndex(
@@ -596,7 +721,7 @@ async function writeCatalogIndex(
     })),
   };
 
-  await fs.writeFile(indexPath, JSON.stringify(payload, null, 2));
+  await fs.writeFile(indexPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
@@ -625,11 +750,17 @@ export async function getDashboardData(): Promise<DashboardData> {
     config.libraries,
     workspaceByLibrary,
   );
+  const librarySummaries = buildLibrarySummaries(
+    config.libraries,
+    nextWorkspaceSkills,
+    nextCatalogSkills,
+  );
 
   return {
     generatedAt: new Date().toISOString(),
     config,
     git,
+    librarySummaries,
     summary: {
       libraries: config.libraries.length,
       workspaceSkills: workspaceSkills.length,
@@ -651,6 +782,16 @@ export async function getDashboardData(): Promise<DashboardData> {
   };
 }
 
+function isPathInside(rootPath: string, targetPath: string) {
+  const relativePath = path.relative(rootPath, targetPath);
+
+  return (
+    relativePath !== "" &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
 async function copyDirectory(
   sourcePath: string,
   destinationPath: string,
@@ -665,6 +806,14 @@ async function copyDirectory(
   });
 }
 
+async function removeDirectory(rootPath: string, targetPath: string) {
+  if (!isPathInside(rootPath, targetPath)) {
+    throw new Error("Unsafe delete target.");
+  }
+
+  await fs.rm(targetPath, { recursive: true, force: true });
+}
+
 function findLibrary(config: SkillHubConfig, libraryId: string) {
   const library = config.libraries.find((entry) => entry.id === libraryId);
 
@@ -673,6 +822,72 @@ function findLibrary(config: SkillHubConfig, libraryId: string) {
   }
 
   return library;
+}
+
+async function findSkillRecord(
+  skillId: string,
+  sourceId: string,
+  locationType: "library" | "catalog",
+) {
+  const config = await loadSkillHubConfig();
+
+  if (locationType === "catalog") {
+    const catalogSkills = await scanCatalogSkills(config);
+    const record = catalogSkills.find((skill) => skill.id === skillId);
+
+    if (!record) {
+      throw new Error(`Catalog skill ${skillId} was not found.`);
+    }
+
+    return {
+      config,
+      record,
+      manifest: record.manifest,
+    };
+  }
+
+  const library = findLibrary(config, sourceId);
+  const workspaceSkills = await scanLibrarySkills(library);
+  const record = workspaceSkills.find((skill) => skill.id === skillId);
+
+  if (!record) {
+    throw new Error(`Skill ${skillId} was not found in ${library.label}.`);
+  }
+
+  return {
+    config,
+    record,
+    manifest: undefined,
+  };
+}
+
+export async function getSkillDetail(
+  skillId: string,
+  sourceId: string,
+  locationType: "library" | "catalog",
+): Promise<SkillDetail> {
+  const { record, manifest } = await findSkillRecord(skillId, sourceId, locationType);
+  const [skillMarkdown, readmeMarkdown, packageJson, files] = await Promise.all([
+    readTextIfExists(record.skillFile),
+    readTextIfExists(record.readmeFile),
+    readJsonIfExists(record.packageJsonFile),
+    collectRelativeFiles(record.path),
+  ]);
+  const parsedSkill = matter(skillMarkdown ?? "");
+
+  return {
+    skill: record,
+    manifest,
+    frontmatter:
+      parsedSkill.data && typeof parsedSkill.data === "object"
+        ? (parsedSkill.data as Record<string, unknown>)
+        : {},
+    skillMarkdown: skillMarkdown ?? "",
+    readmeMarkdown,
+    packageJson,
+    files,
+    totalFiles: record.fileCount,
+  };
 }
 
 export async function rebuildCatalogIndex() {
@@ -709,7 +924,7 @@ export async function importSkillToCatalog(skillId: string, libraryId: string) {
   await copyDirectory(sourceSkill.path, targetPath, new Set([".skillhub.json"]));
   await fs.writeFile(
     path.join(targetPath, ".skillhub.json"),
-    JSON.stringify(manifest, null, 2),
+    `${JSON.stringify(manifest, null, 2)}\n`,
   );
 
   const catalogSkills = await scanCatalogSkills(config);
@@ -733,6 +948,55 @@ export async function installCatalogSkill(skillId: string, libraryId: string) {
 
   await fs.mkdir(library.path, { recursive: true });
   await copyDirectory(sourcePath, targetPath, new Set([".skillhub.json"]));
+
+  return getDashboardData();
+}
+
+export async function syncSkillBetweenLibraries(
+  skillId: string,
+  sourceLibraryId: string,
+  targetLibraryId: string,
+) {
+  const config = await loadSkillHubConfig();
+  const sourceLibrary = findLibrary(config, sourceLibraryId);
+  const targetLibrary = findLibrary(config, targetLibraryId);
+
+  if (sourceLibrary.id === targetLibrary.id) {
+    throw new Error("Source and target libraries must be different.");
+  }
+
+  const workspaceSkills = await scanLibrarySkills(sourceLibrary);
+  const sourceSkill = workspaceSkills.find((skill) => skill.id === skillId);
+
+  if (!sourceSkill) {
+    throw new Error(`Skill ${skillId} was not found in ${sourceLibrary.label}.`);
+  }
+
+  const targetPath = path.join(targetLibrary.path, skillId);
+  await fs.mkdir(targetLibrary.path, { recursive: true });
+  await copyDirectory(sourceSkill.path, targetPath, new Set([".skillhub.json"]));
+
+  return getDashboardData();
+}
+
+export async function removeCatalogSkill(skillId: string) {
+  const config = await loadSkillHubConfig();
+  const targetPath = path.join(resolveFromRepo(config.catalog.directory), skillId);
+
+  await removeDirectory(resolveFromRepo(config.catalog.directory), targetPath);
+
+  const catalogSkills = await scanCatalogSkills(config);
+  await writeCatalogIndex(config, catalogSkills);
+
+  return getDashboardData();
+}
+
+export async function removeLibrarySkill(skillId: string, libraryId: string) {
+  const config = await loadSkillHubConfig();
+  const library = findLibrary(config, libraryId);
+  const targetPath = path.join(library.path, skillId);
+
+  await removeDirectory(library.path, targetPath);
 
   return getDashboardData();
 }

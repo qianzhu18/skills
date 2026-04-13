@@ -1,0 +1,4 @@
+interface:
+  display_name: "Qianzhu Writing Style"
+  short_description: "让千逐的内容更像本人，尤其擅长从平常事物和互联网现象里写出有判断的洞察"
+  default_prompt: "Use $qianzhu-writing-style to draft or revise a qianzhu article or bio with practical value, personal judgment, visible growth trace, and stronger everyday-phenomenon insight. If the topic comes from internet culture or a small daily trigger, keep digging until it lands on a specific reminder rather than a weak social closing. If this is an Obsidian article-production task, continue into the full chain: title assets, short promo copy, and explicit $smart-illustrator cover and inline image completion."

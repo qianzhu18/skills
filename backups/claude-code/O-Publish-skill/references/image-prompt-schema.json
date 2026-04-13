@@ -1,0 +1,61 @@
+{
+  "version": "1.1",
+  "source_markdown": "path/to/article.md",
+  "platform": "xiaohongshu",
+  "article_image_mode": "with-inline",
+  "image_skill_priority": {
+    "cover": [
+      "smart-illustrator --mode cover --platform xiaohongshu",
+      "smart-illustrator --mode cover --platform xiaohongshu --prompt-only",
+      "baoyu-cover-image",
+      "baoyu-image-gen (prompt-only)"
+    ],
+    "article": [
+      "smart-illustrator (article mode)",
+      "smart-illustrator --prompt-only (JSON)",
+      "baoyu-article-illustrator",
+      "baoyu-image-gen (prompt-only)"
+    ]
+  },
+  "cover": {
+    "id": "cover-01",
+    "label": "COVER",
+    "platform": "xiaohongshu",
+    "output_path": "./assets/article-cover.png",
+    "prompt": "标题：xxx\\n平台：xiaohongshu\\n要求：高辨识度封面图...",
+    "context_excerpt": "文章摘要..."
+  },
+  "article_images": [
+    {
+      "id": "img-01",
+      "label": "IMG-01",
+      "source": "marker",
+      "anchor_line": 42,
+      "anchor_heading": "核心流程",
+      "instruction": "做一个流程图，突出关键步骤与风险点",
+      "output_path": "./assets/article-image-01.png",
+      "aspect_ratio": "3:4"
+    }
+  ],
+  "local_reference_images": [
+    "./assets/step-01.png"
+  ],
+  "smart_illustrator_prompt_only_json": {
+    "instruction": "请为我绘制 N 张图片（generate N images）...",
+    "batch_rules": {
+      "total": 1,
+      "one_item_one_image": true,
+      "aspect_ratio": "3:4",
+      "do_not_merge": true
+    },
+    "style_ref": "~/.claude/skills/smart-illustrator/styles/style-light.md",
+    "cover_prompt": "标题：xxx ...",
+    "pictures": [
+      {
+        "id": 1,
+        "topic": "核心流程",
+        "content": "位置标签：IMG-01\\n插入位置：核心流程\\n需求：..."
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeChat Cover"
+  short_description: "为千逐公众号文章生成 Dan Koe 式黑白维多利亚版画封面"
+  default_prompt: "Use $wechat-cover to create or revise a qianzhu WeChat article cover. Analyze the article, write a Dan Koe style black-and-white Victorian woodcut/etching prompt, generate two cover candidates, default to Gemini 3 first, and only fall back to gemini-2.5-flash-image if Gemini 3 stalls or fails."

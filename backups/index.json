@@ -1,0 +1,464 @@
+{
+  "generatedAt": "2026-04-13T12:37:59.673Z",
+  "note": "Backups exclude dependency caches and generated build output such as node_modules, .venv, dist, build, .next, .git, __pycache__, and .DS_Store.",
+  "sources": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code Skills",
+      "sourcePath": "/Users/mac/.claude/skills",
+      "backupPath": "backups/claude-code",
+      "skillCount": 36,
+      "skills": [
+        {
+          "id": "skill-creator",
+          "relativePath": ".system/skill-creator",
+          "fileCount": 5,
+          "sizeBytes": 50360,
+          "updatedAt": "2026-01-22T16:00:16.000Z",
+          "hash": "37020812ec5e425fbd107ce067fff232763cb33f37b40ece7195faadd7b6000f"
+        },
+        {
+          "id": "skill-installer",
+          "relativePath": ".system/skill-installer",
+          "fileCount": 5,
+          "sizeBytes": 27846,
+          "updatedAt": "2026-01-22T16:00:16.000Z",
+          "hash": "daea0fb9386a173b4ab2f671c59a0be4023bfa1367e05aeb9b03dbe310051bd0"
+        },
+        {
+          "id": "agent-reach",
+          "relativePath": "agent-reach",
+          "fileCount": 1,
+          "sizeBytes": 7782,
+          "updatedAt": "2026-03-17T12:25:57.000Z",
+          "hash": "a46813c4887b0ee8875f31e22aad421ae73a9c22f4a2495f433da66c7edb14e6"
+        },
+        {
+          "id": "baoyu-article-illustrator",
+          "relativePath": "baoyu-article-illustrator",
+          "fileCount": 29,
+          "sizeBytes": 78790,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "feb854b283b52aaa3676da6a92858a99d3855a20fde08f289f768150629ecae6"
+        },
+        {
+          "id": "baoyu-comic",
+          "relativePath": "baoyu-comic",
+          "fileCount": 34,
+          "sizeBytes": 110770,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "a53d02c00d72bd4b078b362ad2bf3d503b15c1f63ec2498fb3751b601aab74b2"
+        },
+        {
+          "id": "baoyu-compress-image",
+          "relativePath": "baoyu-compress-image",
+          "fileCount": 2,
+          "sizeBytes": 14668,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "37f823715d00e595afe2dad3280a73706d5d0318df96ee8eae1e311680b9077f"
+        },
+        {
+          "id": "baoyu-cover-image",
+          "relativePath": "baoyu-cover-image",
+          "fileCount": 29,
+          "sizeBytes": 83655,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "3e4ca8902952b3bae642f5a0a4eb1da6286d899dfdf85043ff2107dea34de19b"
+        },
+        {
+          "id": "baoyu-danger-gemini-web",
+          "relativePath": "baoyu-danger-gemini-web",
+          "fileCount": 25,
+          "sizeBytes": 93413,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "2cdf5fba6d6fdee1eb4e4e2137a8100d7d76a0e53006b5ad064b0a6f3254fe7e"
+        },
+        {
+          "id": "baoyu-danger-x-to-markdown",
+          "relativePath": "baoyu-danger-x-to-markdown",
+          "fileCount": 14,
+          "sizeBytes": 94560,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "7887110f3771f5489f0ac4b3e391d68cfee00e865210b2f4a2aac884b06aef02"
+        },
+        {
+          "id": "baoyu-format-markdown",
+          "relativePath": "baoyu-format-markdown",
+          "fileCount": 7,
+          "sizeBytes": 70325,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "6cfb7f71d7de8d2d144133da9581a7dcdf3d5a2f13f352682f0a0a19e902d315"
+        },
+        {
+          "id": "baoyu-image-gen",
+          "relativePath": "baoyu-image-gen",
+          "fileCount": 6,
+          "sizeBytes": 31795,
+          "updatedAt": "2026-04-11T17:46:49.000Z",
+          "hash": "c475d6835986d060727c2c906c4e69e487378ed7f22231734bb37714de289fec"
+        },
+        {
+          "id": "baoyu-infographic",
+          "relativePath": "baoyu-infographic",
+          "fileCount": 41,
+          "sizeBytes": 56220,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "2d467c32b5a2c799cc8fef3c5857c10d8483611b6cd0ad490893cf98afa879f7"
+        },
+        {
+          "id": "baoyu-markdown-to-html",
+          "relativePath": "baoyu-markdown-to-html",
+          "fileCount": 21,
+          "sizeBytes": 167644,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "6459923d91fb2062d34be5798210f2be1a2806e1f01b97536842ad7ddc6059dc"
+        },
+        {
+          "id": "baoyu-post-to-wechat",
+          "relativePath": "baoyu-post-to-wechat",
+          "fileCount": 28,
+          "sizeBytes": 233565,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "53dde0fa52921261debdab9d207f0d2c35a77d4a30ddafa0ee8121a6241974f1"
+        },
+        {
+          "id": "baoyu-post-to-x",
+          "relativePath": "baoyu-post-to-x",
+          "fileCount": 11,
+          "sizeBytes": 105516,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "03ee9b3c04e251571d315530bf1c1d83f096ab9defe3470dfa2df70c5c3a3c64"
+        },
+        {
+          "id": "baoyu-slide-deck",
+          "relativePath": "baoyu-slide-deck",
+          "fileCount": 32,
+          "sizeBytes": 121334,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "de73182d269a3c3302c66fa6ac06e8f9fa3055f3c3616345bd35805c65c3dc43"
+        },
+        {
+          "id": "baoyu-url-to-markdown",
+          "relativePath": "baoyu-url-to-markdown",
+          "fileCount": 6,
+          "sizeBytes": 33665,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "f5591020a83b2cb34e222c8e991d6c640992ba8bcce182def75dc4941da2ed20"
+        },
+        {
+          "id": "baoyu-xhs-images",
+          "relativePath": "baoyu-xhs-images",
+          "fileCount": 21,
+          "sizeBytes": 81129,
+          "updatedAt": "2026-02-02T15:13:30.000Z",
+          "hash": "f4cc2044b5c831476dc489acc789ce8ef03167768ba16f17a5f11d692052a48f"
+        },
+        {
+          "id": "gstack",
+          "relativePath": "gstack",
+          "fileCount": 134,
+          "sizeBytes": 1798055,
+          "updatedAt": "2026-03-18T16:37:53.000Z",
+          "hash": "96651e7f68710cac8b6fde7491f6e87db1d3e425651c242a084682d29f9b8511"
+        },
+        {
+          "id": "json-canvas",
+          "relativePath": "json-canvas",
+          "fileCount": 1,
+          "sizeBytes": 14013,
+          "updatedAt": "2026-01-11T20:13:05.000Z",
+          "hash": "376e327fd4b89b71b80e58d4c58e3d7b38843968befe9461dab4ea738adb8856"
+        },
+        {
+          "id": "last30days",
+          "relativePath": "last30days",
+          "fileCount": 293,
+          "sizeBytes": 17561443,
+          "updatedAt": "2026-04-07T07:54:04.000Z",
+          "hash": "9f9ef0f51e6bf55a823661facf83d53ff2ea5b3cb74ca7bc6643c9fad2869787"
+        },
+        {
+          "id": "O-Manage-skill",
+          "relativePath": "O-Manage-skill",
+          "fileCount": 2,
+          "sizeBytes": 9812,
+          "updatedAt": "2026-02-06T12:52:01.000Z",
+          "hash": "dea42aa44fbb583df6cb024e848e3a70fb2f7db7c2cf04ff3606ceb13b7a6a3b"
+        },
+        {
+          "id": "O-Publish-skill",
+          "relativePath": "O-Publish-skill",
+          "fileCount": 35,
+          "sizeBytes": 5605505,
+          "updatedAt": "2026-04-08T17:42:33.000Z",
+          "hash": "48cc9930b5f515176e634cca88774ae263d5654cb2d2606e19e932eed352850c"
+        },
+        {
+          "id": "obsidian-bases",
+          "relativePath": "obsidian-bases",
+          "fileCount": 1,
+          "sizeBytes": 16442,
+          "updatedAt": "2026-01-11T20:13:05.000Z",
+          "hash": "cdbbefc06caf7d5bcb1d342f649fe9372c444b17a5200e64b7d8c8e1900f8b79"
+        },
+        {
+          "id": "obsidian-canvas-creator",
+          "relativePath": "obsidian-canvas-creator",
+          "fileCount": 5,
+          "sizeBytes": 36223,
+          "updatedAt": "2026-01-16T04:10:20.000Z",
+          "hash": "14beaa53118bcbc14bcdb6ae0de7adcc9e44cf7c969cf2ac61105246acaf8ad2"
+        },
+        {
+          "id": "opencli-skill",
+          "relativePath": "opencli-skill",
+          "fileCount": 2,
+          "sizeBytes": 13165,
+          "updatedAt": "2026-03-17T09:24:48.000Z",
+          "hash": "bcd2858676ccd683ca62e4da9326d2b86a0bdd90ffd3a9d2fb3982aa2a54dd29"
+        },
+        {
+          "id": "oss-investment-scorecard",
+          "relativePath": "oss-investment-scorecard",
+          "fileCount": 14,
+          "sizeBytes": 62640,
+          "updatedAt": "2026-03-13T03:46:03.000Z",
+          "hash": "d6d381e518a4694b7292eef5fd15fc9541d41f7e0b52eb2d9f9b16dbd22bde1a"
+        },
+        {
+          "id": "pm-req-devspec",
+          "relativePath": "pm-req-devspec",
+          "fileCount": 6,
+          "sizeBytes": 6750,
+          "updatedAt": "2026-01-22T16:12:14.000Z",
+          "hash": "ea8aaf35805d3174c854a7edc4752c06006fbfbf520d81a9f44281b0ed6c44a9"
+        },
+        {
+          "id": "prd",
+          "relativePath": "prd",
+          "fileCount": 1,
+          "sizeBytes": 7170,
+          "updatedAt": "2026-01-22T21:50:23.000Z",
+          "hash": "08c2132adfbd2159b560a51e0ec1a5d533bf3e3c9f9962670bff734a8071c0f1"
+        },
+        {
+          "id": "qianzhu-longform-writer",
+          "relativePath": "qianzhu-longform-writer",
+          "fileCount": 3,
+          "sizeBytes": 11516,
+          "updatedAt": "2026-04-07T17:13:16.000Z",
+          "hash": "be5a2ac271de2b89b6bb1b88cc6d0116fb9be3e38f0e23dcbea25d45330658eb"
+        },
+        {
+          "id": "qianzhu-writing-style",
+          "relativePath": "qianzhu-writing-style",
+          "fileCount": 9,
+          "sizeBytes": 36165,
+          "updatedAt": "2026-04-09T16:55:26.000Z",
+          "hash": "ebfd3c21dc87bfbb1459f685d4a8c3b79d20ce2f6c1336965c41da2bed399f61"
+        },
+        {
+          "id": "ralph",
+          "relativePath": "ralph",
+          "fileCount": 1,
+          "sizeBytes": 7487,
+          "updatedAt": "2026-01-22T21:50:11.000Z",
+          "hash": "45aef4b92a1081ebfded322451842fb49db2c0663828fccbf67aec719cbba804"
+        },
+        {
+          "id": "skill-creator",
+          "relativePath": "skill-creator",
+          "fileCount": 19,
+          "sizeBytes": 242841,
+          "updatedAt": "2026-03-13T03:42:08.000Z",
+          "hash": "5781b2be70748ff30130195f4928c0e3e8b7432b31dd6fefe4ee13da4e43aac4"
+        },
+        {
+          "id": "web-access",
+          "relativePath": "web-access",
+          "fileCount": 8,
+          "sizeBytes": 49878,
+          "updatedAt": "2026-03-29T14:57:46.000Z",
+          "hash": "8c23649240c10c90e42b3aafb0d06f3af48dbd4db98bf4e44bd473d0f3f144f5"
+        },
+        {
+          "id": "wechat-dedup",
+          "relativePath": "wechat-dedup",
+          "fileCount": 5,
+          "sizeBytes": 22210,
+          "updatedAt": "2026-02-13T14:03:44.000Z",
+          "hash": "9126b37c42f3f6b5d84317f818410398bd475eab6a0280b443dcfe3738c34b7a"
+        },
+        {
+          "id": "x-article-publisher",
+          "relativePath": "x-article-publisher",
+          "fileCount": 8,
+          "sizeBytes": 54928,
+          "updatedAt": "2026-04-13T08:28:07.000Z",
+          "hash": "90319b6566f3e1f67f74f25d1056bbac8c2cbdcf587cf376f73fce41dc7f8fc8"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex Skills",
+      "sourcePath": "/Users/mac/.codex/skills",
+      "backupPath": "backups/codex",
+      "skillCount": 19,
+      "skills": [
+        {
+          "id": "imagegen",
+          "relativePath": ".system/imagegen",
+          "fileCount": 11,
+          "sizeBytes": 95974,
+          "updatedAt": "2026-04-13T11:59:32.000Z",
+          "hash": "c22795c439e19eb77a5de1c5f25f8a9d7c853cf974cf6c740f423bb1c6d82e1e"
+        },
+        {
+          "id": "openai-docs",
+          "relativePath": ".system/openai-docs",
+          "fileCount": 8,
+          "sizeBytes": 47470,
+          "updatedAt": "2026-04-13T11:59:32.000Z",
+          "hash": "1038046dc3b73f12e1a377e565408aaa79477b5d8abfb622613bb26468d9d42b"
+        },
+        {
+          "id": "plugin-creator",
+          "relativePath": ".system/plugin-creator",
+          "fileCount": 6,
+          "sizeBytes": 27216,
+          "updatedAt": "2026-04-13T11:59:32.000Z",
+          "hash": "ed18a00458c0d991046ca04bc02ead18c9589e3a5f5313a740fdf10b80ed499b"
+        },
+        {
+          "id": "skill-creator",
+          "relativePath": ".system/skill-creator",
+          "fileCount": 9,
+          "sizeBytes": 63340,
+          "updatedAt": "2026-04-13T11:59:32.000Z",
+          "hash": "3f752899e0e21df6c640d762184f84393fd927fc5b498b096fc5cc5b7e03a6eb"
+        },
+        {
+          "id": "skill-installer",
+          "relativePath": ".system/skill-installer",
+          "fileCount": 8,
+          "sizeBytes": 30676,
+          "updatedAt": "2026-04-13T11:59:32.000Z",
+          "hash": "37e8a20664364b3f28cfb25a01fffea3cbab64e0009b76d54dede044705e55e1"
+        },
+        {
+          "id": "competitor-analysis",
+          "relativePath": "competitor-analysis",
+          "fileCount": 1,
+          "sizeBytes": 4814,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "589b2783c3fa6f8a559217ebf053b8311a8dea27627037798c8eba177efe58b7"
+        },
+        {
+          "id": "create-prd",
+          "relativePath": "create-prd",
+          "fileCount": 1,
+          "sizeBytes": 3551,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "5c242d3abb9508f59021ed22936230e555971feab690cbf2a90142e06d10e7ae"
+        },
+        {
+          "id": "customer-journey-map",
+          "relativePath": "customer-journey-map",
+          "fileCount": 1,
+          "sizeBytes": 3268,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "793689f403818a1a357e5fac0f36f9a83397fbca2ed9e56de849cfc957010f68"
+        },
+        {
+          "id": "identify-assumptions-new",
+          "relativePath": "identify-assumptions-new",
+          "fileCount": 1,
+          "sizeBytes": 3227,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "863667c0d27c925650ebf43fbb755e0f5586ea804bc051eedbf6e92f6785df28"
+        },
+        {
+          "id": "interview-script",
+          "relativePath": "interview-script",
+          "fileCount": 1,
+          "sizeBytes": 4817,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "867f90ce30998d6a3120f689dcccbd56d38204da679a0c7f35a3b60d5fcc5bfb"
+        },
+        {
+          "id": "job-stories",
+          "relativePath": "job-stories",
+          "fileCount": 1,
+          "sizeBytes": 2969,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "8b4a0d96bffd81266981e7ed0ed979d415995f6734d65e3cf6293cd28399d3a3"
+        },
+        {
+          "id": "opportunity-solution-tree",
+          "relativePath": "opportunity-solution-tree",
+          "fileCount": 1,
+          "sizeBytes": 4281,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "0bbc9c2da81f4e6143d17de9e34fa9b275a6c408bf5f351ccc0a76c9ea50b11e"
+        },
+        {
+          "id": "qianzhu-writing-style",
+          "relativePath": "qianzhu-writing-style",
+          "fileCount": 9,
+          "sizeBytes": 41740,
+          "updatedAt": "2026-04-11T17:58:50.000Z",
+          "hash": "9301e8e82b71caa653138e4292053ff9a7edc74dcab47f41559429b4c1d4cbd5"
+        },
+        {
+          "id": "smart-illustrator",
+          "relativePath": "smart-illustrator",
+          "fileCount": 30,
+          "sizeBytes": 5555199,
+          "updatedAt": "2026-04-11T17:58:40.000Z",
+          "hash": "3eccad405a2e2602e44eead885f655dcffa380510ac5a82c1611e19438c806a5"
+        },
+        {
+          "id": "user-personas",
+          "relativePath": "user-personas",
+          "fileCount": 1,
+          "sizeBytes": 3047,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "271152c8d16d09fd3448e3d33707d61373c3c06e4619e8a1e9730d5305c120d4"
+        },
+        {
+          "id": "user-segmentation",
+          "relativePath": "user-segmentation",
+          "fileCount": 1,
+          "sizeBytes": 4102,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "540d00a0b213d4c297f06aae7cb5315612d2b5dd74f204af640f0eff122953fe"
+        },
+        {
+          "id": "value-proposition",
+          "relativePath": "value-proposition",
+          "fileCount": 1,
+          "sizeBytes": 5836,
+          "updatedAt": "2026-04-11T18:31:39.000Z",
+          "hash": "2a2da3df17301089d6dbd9b39392c72e2723117f01291d6d28020d80a6840a5e"
+        },
+        {
+          "id": "web-access",
+          "relativePath": "web-access",
+          "fileCount": 10,
+          "sizeBytes": 56634,
+          "updatedAt": "2026-04-13T08:17:53.000Z",
+          "hash": "16684422044de24da9cddd5e055a83dfc1e7fa07e28789d7fbe0dfe8292a7861"
+        },
+        {
+          "id": "wechat-cover",
+          "relativePath": "wechat-cover",
+          "fileCount": 3,
+          "sizeBytes": 10984,
+          "updatedAt": "2026-04-11T18:35:24.000Z",
+          "hash": "819bf417ce6c62732cc0f5f748c679dc17402df755bf7a1c639dcddf52a1e66d"
+        }
+      ]
+    }
+  ]
+}

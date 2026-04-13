@@ -42,6 +42,18 @@ export type SkillRecord = {
   locationType: "library" | "catalog";
 };
 
+export type LibrarySummary = {
+  id: string;
+  label: string;
+  path: string;
+  description?: string;
+  skillCount: number;
+  syncedCount: number;
+  changedCount: number;
+  missingCount: number;
+  updateAvailableCount: number;
+};
+
 export type CatalogManifest = {
   id: string;
   name: string;
@@ -56,6 +68,7 @@ export type CatalogManifest = {
 };
 
 export type WorkspaceSkill = SkillRecord & {
+  locationType: "library";
   catalogStatus: "missing" | "synced" | "changed";
   catalogPath?: string;
   catalogImportedFrom?: string;
@@ -71,6 +84,7 @@ export type InstallationStatus = {
 };
 
 export type CatalogSkill = SkillRecord & {
+  locationType: "catalog";
   manifest?: CatalogManifest;
   installations: InstallationStatus[];
 };
@@ -88,6 +102,7 @@ export type DashboardData = {
   generatedAt: string;
   config: SkillHubConfig;
   git: GitStatus;
+  librarySummaries: LibrarySummary[];
   summary: {
     libraries: number;
     workspaceSkills: number;
@@ -97,6 +112,20 @@ export type DashboardData = {
   };
   workspaceSkills: WorkspaceSkill[];
   catalogSkills: CatalogSkill[];
+};
+
+export type SkillDetail = {
+  skill: SkillRecord;
+  manifest?: CatalogManifest;
+  frontmatter: Record<string, unknown>;
+  skillMarkdown: string;
+  readmeMarkdown?: string;
+  packageJson?: Record<string, unknown>;
+  files: Array<{
+    path: string;
+    sizeBytes: number;
+  }>;
+  totalFiles: number;
 };
 
 export type ActionResponse = {

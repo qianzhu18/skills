@@ -3,20 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "dev:main": "next dev --port 3000",
-    "dev:catalog": "next dev --port 3001",
-    "dev:sync": "next dev --port 3002",
+    "dev": "next dev --hostname 0.0.0.0 --port 3009",
+    "dev:main": "next dev --hostname 0.0.0.0 --port 3009",
+    "dev:catalog": "next dev --hostname 0.0.0.0 --port 3010",
+    "dev:sync": "next dev --hostname 0.0.0.0 --port 3011",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "HOSTNAME=0.0.0.0 PORT=3009 node .next/standalone/server.js",
+    "lint": "eslint",
+    "docker:build": "docker compose build skillhub",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f skillhub"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
