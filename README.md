@@ -95,6 +95,8 @@ npm run docker:logs
 
 这个项目不是从零发明了一整套体系，而是做了资源整合和轻量缝合，主要参考了这几类模式：
 
+- [Backtthefuture/huangshu - tools/skill-hub](https://github.com/Backtthefuture/huangshu/tree/main/tools/skill-hub)
+  - 参考它的本地 Web 控制台、左侧导航、状态筛选、批量管理、版本历史和回收站方向
 - [openai/skills](https://github.com/openai/skills)
   - 参考它的 skills catalog 和可分发结构
 - [obsidianmd/obsidian-releases](https://github.com/obsidianmd/obsidian-releases)
@@ -109,6 +111,8 @@ npm run docker:logs
 
 ## 后续可继续加的方向
 
+- 适配 `main` 分支的 skills-only 备份布局：`claude-code/`、`codex/`、`index.json`
+- 参考 Skill Hub 增加编辑 `SKILL.md`、版本快照、回收站和重复 skill 检测
 - 在线编辑 `SKILL.md` / README
 - Catalog 分类、标签和封面图
 - GitHub OAuth / PAT 驱动的云端发布

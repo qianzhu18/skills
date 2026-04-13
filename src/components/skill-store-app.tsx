@@ -59,6 +59,8 @@ type Section = {
 
 type PreviewTab = "overview" | "skill" | "readme" | "files" | "package" | "manifest";
 
+type SkillFilter = "all" | "needs-action" | "changed" | "missing" | "synced";
+
 type SyncLocationState = "mirrored" | "synced" | "drift" | "local-only" | "missing";
 
 type SyncMatrixCell = {
@@ -248,6 +250,115 @@ function syncCellLabel(state: SyncLocationState) {
   }
 
   return "缺失";
+}
+
+function sectionBadge(section: Section, data: DashboardData) {
+  if (section.mode === "library") {
+    return data.librarySummaries.find((library) => library.id === section.key)
+      ?.skillCount;
+  }
+
+  if (section.key === "catalog") {
+    return data.summary.catalogSkills;
+  }
+
+  if (section.key === "sync") {
+    return data.summary.pendingImports + data.summary.pendingInstalls;
+  }
+
+  return undefined;
+}
+
+function skillMatchesFilter(
+  filter: SkillFilter,
+  skill: WorkspaceSkill | CatalogSkill,
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  if (skill.locationType === "library") {
+    if (filter === "needs-action") {
+      return skill.catalogStatus !== "synced";
+    }
+
+    if (filter === "changed") {
+      return skill.catalogStatus === "changed";
+    }
+
+    if (filter === "missing") {
+      return skill.catalogStatus === "missing";
+    }
+
+    return skill.catalogStatus === "synced";
+  }
+
+  const hasUpdates = skill.installations.some(
+    (installation) => installation.status === "update-available",
+  );
+  const hasMissing = skill.installations.some(
+    (installation) => installation.status === "missing",
+  );
+  const allInstalled = skill.installations.every(
+    (installation) => installation.status === "installed",
+  );
+
+  if (filter === "needs-action") {
+    return hasUpdates || hasMissing;
+  }
+
+  if (filter === "changed") {
+    return hasUpdates;
+  }
+
+  if (filter === "missing") {
+    return hasMissing;
+  }
+
+  return allInstalled;
+}
+
+function buildSkillFilters(
+  skills: Array<WorkspaceSkill | CatalogSkill>,
+  mode?: SectionMode,
+) {
+  const catalogMode = mode === "catalog";
+  const filters: Array<{
+    key: SkillFilter;
+    label: string;
+    description: string;
+  }> = [
+    {
+      key: "all",
+      label: "全部",
+      description: "当前视图的全部 skills",
+    },
+    {
+      key: "needs-action",
+      label: "待处理",
+      description: catalogMode ? "未安装或有更新" : "缺镜像或有差异",
+    },
+    {
+      key: "changed",
+      label: catalogMode ? "可更新" : "有差异",
+      description: catalogMode ? "本地版本落后于镜像" : "本地与镜像 hash 不一致",
+    },
+    {
+      key: "missing",
+      label: catalogMode ? "未安装" : "缺云端",
+      description: catalogMode ? "至少一个本地库未安装" : "还没同步到云端镜像",
+    },
+    {
+      key: "synced",
+      label: catalogMode ? "已安装" : "已对齐",
+      description: catalogMode ? "所有目标库均已安装" : "本地与云端一致",
+    },
+  ];
+
+  return filters.map((filter) => ({
+    ...filter,
+    count: skills.filter((skill) => skillMatchesFilter(filter.key, skill)).length,
+  }));
 }
 
 function getInitialSection(data: DashboardData) {
@@ -499,6 +610,61 @@ function SectionButton({
   );
 }
 
+function SidebarSectionButton({
+  section,
+  active,
+  badge,
+  onClick,
+}: {
+  section: Section;
+  active: boolean;
+  badge?: string | number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`sidebar-section-button ${
+        active ? "sidebar-section-button-active" : ""
+      }`}
+    >
+      <span>
+        <span className="sidebar-section-label">{section.label}</span>
+        <span className="sidebar-section-copy">{section.description}</span>
+      </span>
+      {badge !== undefined ? <span className="section-badge">{badge}</span> : null}
+    </button>
+  );
+}
+
+function SkillFilterBar({
+  options,
+  active,
+  onChange,
+}: {
+  options: ReturnType<typeof buildSkillFilters>;
+  active: SkillFilter;
+  onChange: (filter: SkillFilter) => void;
+}) {
+  return (
+    <div className="filter-bar">
+      {options.map((option) => (
+        <button
+          type="button"
+          key={option.key}
+          className={`filter-chip ${active === option.key ? "filter-chip-active" : ""}`}
+          onClick={() => onChange(option.key)}
+          title={option.description}
+        >
+          <span>{option.label}</span>
+          <span className="filter-count">{option.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Pagination({
   page,
   totalPages,
@@ -557,6 +723,7 @@ function LibraryStatusCard({ library }: { library: LibrarySummary }) {
 export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [data, setData] = useState(initialData);
   const [activeSection, setActiveSection] = useState(getInitialSection(initialData));
+  const [skillFilter, setSkillFilter] = useState<SkillFilter>("all");
   const [search, setSearch] = useState("");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
@@ -663,6 +830,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   useEffect(() => {
     if (activeSectionConfig) {
       setPreviewTab("overview");
+      setSkillFilter("all");
     }
   }, [activeSectionConfig]);
 
@@ -672,27 +840,42 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     }
   }, [activeSection, data, sections]);
 
-  const currentSkills = useMemo(() => {
+  const rawCurrentSkills = useMemo(() => {
     if (activeSectionConfig?.mode === "catalog") {
-      return data.catalogSkills.filter((skill) =>
-        matchesSearch(
-          deferredSearch,
-          skill,
-          skill.installations.map((installation) => installation.libraryLabel),
-        ),
-      );
+      return data.catalogSkills;
     }
 
     if (activeSectionConfig?.mode === "library") {
-      return data.workspaceSkills
-        .filter((skill) => skill.sourceId === activeSectionConfig.key)
-        .filter((skill) =>
-          matchesSearch(deferredSearch, skill, [skill.catalogImportedFrom ?? ""]),
-        );
+      return data.workspaceSkills.filter(
+        (skill) => skill.sourceId === activeSectionConfig.key,
+      );
     }
 
     return [];
-  }, [activeSectionConfig, data.catalogSkills, data.workspaceSkills, deferredSearch]);
+  }, [activeSectionConfig, data.catalogSkills, data.workspaceSkills]);
+
+  const currentSkills = useMemo(() => {
+    return rawCurrentSkills
+      .filter((skill) => skillMatchesFilter(skillFilter, skill))
+      .filter((skill) => {
+        if (skill.locationType === "catalog") {
+          return matchesSearch(
+            deferredSearch,
+            skill,
+            skill.installations.map((installation) => installation.libraryLabel),
+          );
+        }
+
+        return matchesSearch(deferredSearch, skill, [
+          skill.catalogImportedFrom ?? "",
+        ]);
+      });
+  }, [deferredSearch, rawCurrentSkills, skillFilter]);
+
+  const skillFilterOptions = useMemo(
+    () => buildSkillFilters(rawCurrentSkills, activeSectionConfig?.mode),
+    [activeSectionConfig?.mode, rawCurrentSkills],
+  );
 
   const syncRows = useMemo(
     () => buildSyncMatrix(data, deferredSearch),
@@ -925,18 +1108,53 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         ))}
       </section>
 
-      <section className="panel-shell">
-        <div className="section-nav">
+      <section className="manager-workbench">
+        <aside className="sidebar-rail">
+          <div className="sidebar-card sidebar-card-brand">
+            <p className="mini-eyebrow">Skill Hub Mode</p>
+            <h2 className="sidebar-title">本地技能控制台</h2>
+            <p className="sidebar-copy">
+              参考 Skill Hub 的左侧导航和状态筛选，但保留 Codex / Claude
+              双库同步与 GitHub 镜像能力。
+            </p>
+          </div>
+
+          <div className="sidebar-card">
+            <p className="sidebar-kicker">Agent Libraries</p>
+            <div className="sidebar-section-list">
+              {sections.map((section) => (
+                <SidebarSectionButton
+                  key={section.key}
+                  section={section}
+                  active={activeSection === section.key}
+                  badge={sectionBadge(section, data)}
+                  onClick={() => setActiveSection(section.key)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="sidebar-card sidebar-sync-card">
+            <p className="sidebar-kicker">Sync Radar</p>
+            <div className="sync-radar-row">
+              <span>待同步</span>
+              <strong>{data.summary.pendingImports + data.summary.pendingInstalls}</strong>
+            </div>
+            <div className="sync-radar-row">
+              <span>云端镜像</span>
+              <strong>{data.summary.catalogSkills}</strong>
+            </div>
+            <div className="sync-radar-row">
+              <span>Git 状态</span>
+              <strong>{data.git.clean ? "Clean" : "Dirty"}</strong>
+            </div>
+          </div>
+        </aside>
+
+        <section className="panel-shell">
+          <div className="section-nav mobile-section-nav">
           {sections.map((section) => {
-            const badge =
-              section.mode === "library"
-                ? data.librarySummaries.find((library) => library.id === section.key)
-                    ?.skillCount
-                : section.key === "catalog"
-                  ? data.summary.catalogSkills
-                  : section.key === "sync"
-                    ? data.summary.pendingImports + data.summary.pendingInstalls
-                    : undefined;
+            const badge = sectionBadge(section, data);
 
             return (
               <SectionButton
@@ -948,9 +1166,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               />
             );
           })}
-        </div>
+          </div>
 
-        <div className="toolbar-row">
+          <div className="toolbar-row">
           <div>
             <p className="mini-eyebrow">{activeSectionConfig?.label}</p>
             <h2 className="section-heading">{activeSectionConfig?.description}</h2>
@@ -997,9 +1215,18 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               tone="ghost"
             />
           </div>
-        </div>
+          </div>
 
-        {notice ? (
+          {(activeSectionConfig?.mode === "library" ||
+            activeSectionConfig?.mode === "catalog") ? (
+            <SkillFilterBar
+              options={skillFilterOptions}
+              active={skillFilter}
+              onChange={setSkillFilter}
+            />
+          ) : null}
+
+          {notice ? (
           <div
             className={`notice-banner ${
               notice.kind === "success" ? "notice-success" : "notice-error"
@@ -1007,9 +1234,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           >
             {notice.text}
           </div>
-        ) : null}
+          ) : null}
 
-        {activeSectionConfig?.mode === "sync" ? (
+          {activeSectionConfig?.mode === "sync" ? (
           <section className="sync-grid">
             <article className="surface-card">
               <div className="surface-head">
@@ -1189,9 +1416,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               </div>
             </article>
           </section>
-        ) : null}
+          ) : null}
 
-        {activeSectionConfig?.mode === "settings" ? (
+          {activeSectionConfig?.mode === "settings" ? (
           <section className="settings-grid">
             <article className="surface-card">
               <div className="surface-head">
@@ -1379,9 +1606,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               </div>
             </article>
           </section>
-        ) : null}
+          ) : null}
 
-        {(activeSectionConfig?.mode === "library" ||
+          {(activeSectionConfig?.mode === "library" ||
           activeSectionConfig?.mode === "catalog") && (
           <section className="workspace-grid">
             <article className="surface-card list-panel">
@@ -1870,7 +2097,8 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               )}
             </article>
           </section>
-        )}
+          )}
+        </section>
       </section>
     </main>
   );

@@ -165,14 +165,101 @@ textarea {
   }
 
   .panel-shell {
-    @apply rounded-[28px] border p-4 shadow-[0_12px_40px_rgba(47,92,86,0.08)] sm:p-5;
+    @apply min-w-0 rounded-[28px] border p-4 shadow-[0_12px_40px_rgba(47,92,86,0.08)] sm:p-5;
     border-color: var(--line);
     background: rgba(248, 244, 234, 0.72);
     backdrop-filter: blur(18px);
   }
 
+  .manager-workbench {
+    @apply grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)];
+  }
+
+  .sidebar-rail {
+    @apply hidden xl:flex xl:flex-col xl:gap-4;
+  }
+
+  .sidebar-card {
+    @apply rounded-[26px] border p-4;
+    border-color: var(--line);
+    background: rgba(255, 252, 246, 0.78);
+    box-shadow: var(--shadow-soft);
+  }
+
+  .sidebar-card-brand {
+    background:
+      linear-gradient(150deg, rgba(255, 252, 246, 0.96), rgba(227, 237, 232, 0.86)),
+      rgba(255, 252, 246, 0.88);
+  }
+
+  .sidebar-title {
+    @apply mt-2 text-2xl leading-tight;
+    font-family: var(--font-display);
+    color: var(--ink-strong);
+  }
+
+  .sidebar-copy {
+    @apply mt-3 text-sm leading-6;
+    color: var(--ink-soft);
+  }
+
+  .sidebar-kicker {
+    @apply text-xs font-semibold uppercase tracking-[0.2em];
+    color: var(--ink-muted);
+  }
+
+  .sidebar-section-list {
+    @apply mt-3 flex flex-col gap-2;
+  }
+
+  .sidebar-section-button {
+    @apply flex w-full items-center justify-between gap-3 rounded-[18px] border px-3 py-3 text-left transition;
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink);
+  }
+
+  .sidebar-section-button:hover {
+    background: rgba(47, 92, 86, 0.06);
+  }
+
+  .sidebar-section-button-active {
+    border-color: rgba(47, 92, 86, 0.16);
+    background: rgba(47, 92, 86, 0.1);
+    color: var(--primary-dark);
+  }
+
+  .sidebar-section-label {
+    @apply block text-sm font-semibold;
+  }
+
+  .sidebar-section-copy {
+    @apply mt-1 block truncate text-xs leading-5;
+    color: var(--ink-muted);
+  }
+
+  .sidebar-sync-card {
+    @apply flex flex-col gap-3;
+  }
+
+  .sync-radar-row {
+    @apply flex items-center justify-between gap-3 rounded-2xl border px-3 py-2 text-sm;
+    border-color: var(--line-soft);
+    background: rgba(255, 255, 255, 0.6);
+    color: var(--ink);
+  }
+
+  .sync-radar-row strong {
+    font-family: var(--font-display);
+    color: var(--primary-dark);
+  }
+
   .section-nav {
     @apply flex gap-2 overflow-x-auto pb-2;
+  }
+
+  .mobile-section-nav {
+    @apply xl:hidden;
   }
 
   .section-nav::-webkit-scrollbar {
@@ -238,6 +325,38 @@ textarea {
 
   .notice-banner {
     @apply mt-4 rounded-2xl border px-4 py-3 text-sm;
+  }
+
+  .filter-bar {
+    @apply mt-4 flex gap-2 overflow-x-auto pb-1;
+  }
+
+  .filter-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filter-chip {
+    @apply inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition;
+    border-color: var(--line-soft);
+    background: rgba(255, 255, 255, 0.58);
+    color: var(--ink);
+  }
+
+  .filter-chip:hover {
+    border-color: rgba(47, 92, 86, 0.2);
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .filter-chip-active {
+    border-color: rgba(47, 92, 86, 0.18);
+    background: rgba(47, 92, 86, 0.12);
+    color: var(--primary-dark);
+  }
+
+  .filter-count {
+    @apply rounded-full px-2 py-0.5 text-xs font-semibold;
+    background: rgba(47, 92, 86, 0.08);
+    color: inherit;
   }
 
   .notice-success {
