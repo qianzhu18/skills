@@ -25,6 +25,7 @@ import type {
   ActionResponse,
   DashboardData,
   DiscoverSkill,
+  RemoteDiscoverSkill,
   SkillDetail,
   WorkspaceSkill,
 } from "@/lib/skillhub-types";
@@ -250,7 +251,7 @@ function canInstallTarget(item: DiscoverItem, target: LibraryTab) {
 
 function installLabel(state: InstallState, supported: boolean) {
   if (!supported) {
-    return "不兼容";
+    return "暂未收录";
   }
 
   if (state === "installed") {
@@ -270,6 +271,42 @@ function installTone(state: InstallState, supported: boolean) {
   }
 
   return "plain";
+}
+
+function sourceTrustLabel(sourceTrust: DiscoverSkill["trust"]["sourceTrust"]) {
+  if (sourceTrust === "official") {
+    return "官方源";
+  }
+
+  if (sourceTrust === "community") {
+    return "社区源";
+  }
+
+  return "本地源";
+}
+
+function sourceTrustTone(sourceTrust: DiscoverSkill["trust"]["sourceTrust"]) {
+  if (sourceTrust === "official") {
+    return "good" as const;
+  }
+
+  if (sourceTrust === "community") {
+    return "warn" as const;
+  }
+
+  return "plain" as const;
+}
+
+function formatInstalls(installs: number) {
+  if (installs >= 1_000_000) {
+    return `${(installs / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+
+  if (installs >= 1_000) {
+    return `${(installs / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  }
+
+  return String(installs);
 }
 
 async function parseResponse(response: Response) {
@@ -393,6 +430,11 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
   const [discoverPage, setDiscoverPage] = useState(1);
   const [libraryPage, setLibraryPage] = useState(1);
+  const [remoteDiscoverResults, setRemoteDiscoverResults] = useState<RemoteDiscoverSkill[]>(
+    [],
+  );
+  const [remoteDiscoverLoading, setRemoteDiscoverLoading] = useState(false);
+  const [remoteDiscoverError, setRemoteDiscoverError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     kind: "success" | "error";
     text: string;
@@ -427,6 +469,21 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         Object.values(data.meta.records).flatMap((record) => record.generatedTags ?? []),
       ),
     [data.meta.records],
+  );
+  const installedSkillIdsByLibrary = useMemo(
+    () => ({
+      claude: new Set(
+        data.workspaceSkills
+          .filter((skill) => skill.sourceId === "claude" && skill.libraryState === "enabled")
+          .map((skill) => skill.id),
+      ),
+      codex: new Set(
+        data.workspaceSkills
+          .filter((skill) => skill.sourceId === "codex" && skill.libraryState === "enabled")
+          .map((skill) => skill.id),
+      ),
+    }),
+    [data.workspaceSkills],
   );
 
   const filteredDiscover = useMemo(() => {
@@ -703,6 +760,57 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     setLibraryPage(1);
   }, [deferredSearch, libraryTab, selectedTag]);
 
+  useEffect(() => {
+    if (pageTab !== "discover" || deferredSearch.length < 2) {
+      setRemoteDiscoverResults([]);
+      setRemoteDiscoverLoading(false);
+      setRemoteDiscoverError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function searchRemote() {
+      setRemoteDiscoverLoading(true);
+      setRemoteDiscoverError(null);
+
+      try {
+        const response = await fetch(
+          `/api/discover/search?q=${encodeURIComponent(deferredSearch)}`,
+          { cache: "no-store" },
+        );
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          message?: string;
+          skills?: RemoteDiscoverSkill[];
+        };
+
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message ?? "远端搜索失败。");
+        }
+
+        if (!cancelled) {
+          setRemoteDiscoverResults(Array.isArray(payload.skills) ? payload.skills : []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setRemoteDiscoverResults([]);
+          setRemoteDiscoverError(error instanceof Error ? error.message : "远端搜索失败。");
+        }
+      } finally {
+        if (!cancelled) {
+          setRemoteDiscoverLoading(false);
+        }
+      }
+    }
+
+    void searchRemote();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deferredSearch, pageTab]);
+
   const drawerSources = useMemo(() => {
     if (!drawerTarget) {
       return [];
@@ -837,7 +945,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     if (!supportsLibrary(item, target)) {
       setNotice({
         kind: "error",
-        text: `${item.name} 当前没有 ${getLibraryLabel(target)} 兼容来源。`,
+        text: `${item.name} 当前还没有可直接安装到 ${getLibraryLabel(target)} 的收录版本。`,
       });
       return;
     }
@@ -849,7 +957,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     if (!preferredSource) {
       setNotice({
         kind: "error",
-        text: `${item.name} 当前没有 ${getLibraryLabel(target)} 兼容来源。`,
+        text: `${item.name} 当前还没有可直接安装到 ${getLibraryLabel(target)} 的收录版本。`,
       });
       return;
     }
@@ -863,6 +971,19 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
       },
       `install:${item.id}:${target}`,
       `已把 ${item.name} 安装到 ${getLibraryLabel(target)}。`,
+    );
+  }
+
+  async function installRemoteToLibrary(item: RemoteDiscoverSkill, target: LibraryTab) {
+    await runAction(
+      "/api/actions/install-remote",
+      {
+        source: item.source,
+        skillId: item.skillId,
+        libraryId: target,
+      },
+      `remote-install:${item.source}:${item.skillId}:${target}`,
+      `已把 ${item.skillId} 从 skills.sh 安装到 ${getLibraryLabel(target)}。`,
     );
   }
 
@@ -952,6 +1073,10 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     librarySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function isRemoteInstalled(skillId: string, target: LibraryTab) {
+    return installedSkillIdsByLibrary[target].has(skillId);
+  }
+
   return (
     <main className="mvp-shell">
       <header className="mvp-topbar">
@@ -986,7 +1111,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索技能名称、用途、来源或标签…"
+              placeholder="搜索本地 skills，或去 skills.sh 找新技能…"
             />
           </label>
           <button
@@ -1051,8 +1176,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   </strong>
                 </button>
                 <p className="mvp-sidebar-note">
-                  这一版先把本地 catalog 搜准、看清和装好；外部搜索后面再接 Vercel /
-                  find-skills。
+                  搜索框现在会同时帮你查本地收录和 skills.sh 结果，像应用商店一样先找再装。
                 </p>
               </section>
 
@@ -1087,7 +1211,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   高风险
                 </button>
                 <p className="mvp-sidebar-note">
-                  卡片会明确展示来源、兼容性、是否含脚本和风险等级，再决定装不装。
+                  风险不再只看“有没有命令”，而是综合脚本文件、安装钩子、包管理脚本和远端审计。
                 </p>
               </section>
 
@@ -1098,7 +1222,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 </div>
                 <div className="mvp-tag-cloud">
                   {availableTags.length === 0 ? (
-                    <p>还没有标签。点右上角生成一次，后面就能按标签管理。</p>
+                    <p>首次会自动生成一轮标签；你后面只需要手动整理和补充。</p>
                   ) : (
                     availableTags.map((tag) => (
                       <button
@@ -1115,7 +1239,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   )}
                 </div>
                 <p className="mvp-sidebar-note">
-                  标签只做分类管理，不把来源、兼容性、风险这类状态硬塞进去。
+                  标签会先自动打一轮，后面就交给你自己维护，不把来源和风险混进标签里。
                 </p>
               </section>
             </>
@@ -1195,14 +1319,14 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   <span>DISCOVER</span>
                   <h1>先看懂 skill 是干嘛的，再一键安装到正确的端</h1>
                   <p>
-                    Discover 现在就是一个轻量应用商店。你先看用途、兼容性、来源和风险，再决定安装到
-                    Claude Code 还是 Codex，默认隐藏目录和配置细节。
+                    Discover 现在会同时展示本地收录和 skills.sh 搜索结果。你先看用途、来源、风险和可安装目标，
+                    再决定装到 Claude Code 还是 Codex，目录和配置细节默认藏起来。
                   </p>
                 </div>
                 <div className="mvp-hero-metrics">
                   <article>
                     <strong>{filteredDiscover.length}</strong>
-                    <span>可发现技能</span>
+                    <span>本地收录</span>
                   </article>
                   <article>
                     <strong>
@@ -1212,7 +1336,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                         ).length
                       }
                     </strong>
-                    <span>兼容 Claude</span>
+                    <span>可装 Claude</span>
                   </article>
                   <article>
                     <strong>
@@ -1222,20 +1346,110 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                         ).length
                       }
                     </strong>
-                    <span>兼容 Codex</span>
+                    <span>可装 Codex</span>
                   </article>
                   <article>
-                    <strong>{discoverTaggedCount}</strong>
-                    <span>已有标签</span>
+                    <strong>{deferredSearch.length >= 2 ? remoteDiscoverResults.length : discoverTaggedCount}</strong>
+                    <span>{deferredSearch.length >= 2 ? "skills.sh 结果" : "已有标签"}</span>
                   </article>
                 </div>
               </section>
 
+              {deferredSearch.length >= 2 ? (
+                <section className="mvp-section">
+                  <div className="mvp-section-head">
+                    <div>
+                      <span>REMOTE SEARCH</span>
+                      <h2>skills.sh 搜索结果</h2>
+                      <p className="mvp-section-copy">
+                        官方 `find-skills` / Vercel skills 搜索入口，优先帮你找可直接安装的新 skill。
+                      </p>
+                    </div>
+                  </div>
+
+                  {remoteDiscoverLoading ? (
+                    <div className="mvp-loading">
+                      <LoaderCircle size={22} className="spin" />
+                      正在从 skills.sh 搜索…
+                    </div>
+                  ) : remoteDiscoverError ? (
+                    <EmptyState
+                      title="skills.sh 搜索暂时不可用"
+                      copy={remoteDiscoverError}
+                    />
+                  ) : remoteDiscoverResults.length === 0 ? (
+                    <EmptyState
+                      title="skills.sh 里没有找到匹配结果"
+                      copy="你可以继续看下面的本地收录结果，或者换个关键词再搜。"
+                    />
+                  ) : (
+                    <div className="mvp-discover-grid">
+                      {remoteDiscoverResults.map((item) => (
+                        <article key={item.id} className="mvp-discover-card">
+                          <div className="mvp-card-head">
+                            <div className="mvp-card-copy">
+                              <strong>/{item.name}</strong>
+                              <p className="mvp-line-clamp-2">{item.description}</p>
+                            </div>
+                            <a
+                              className="mvp-card-link"
+                              href={item.skillsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              查看
+                            </a>
+                          </div>
+
+                          <div className="mvp-card-badges">
+                            <Badge tone="plain">skills.sh</Badge>
+                            <Badge tone={sourceTrustTone(item.trust.sourceTrust)}>
+                              {sourceTrustLabel(item.trust.sourceTrust)}
+                            </Badge>
+                            <Badge tone="claude">Claude Code</Badge>
+                            <Badge tone="codex">Codex</Badge>
+                            <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
+                            <Badge tone="plain">{formatInstalls(item.installs)} 安装</Badge>
+                          </div>
+
+                          <div className="mvp-card-tags">
+                            {item.tags.length > 0 ? (
+                              item.tags.map((tag) => <span key={tag}>{tag}</span>)
+                            ) : (
+                              <span className="muted">暂无标签</span>
+                            )}
+                          </div>
+
+                          <div className="mvp-install-row">
+                            <button
+                              type="button"
+                              className={`tone-${isRemoteInstalled(item.skillId, "claude") ? "good" : "plain"}`}
+                              disabled={isRemoteInstalled(item.skillId, "claude")}
+                              onClick={() => void installRemoteToLibrary(item, "claude")}
+                            >
+                              {isRemoteInstalled(item.skillId, "claude") ? "已安装" : "安装"} Claude
+                            </button>
+                            <button
+                              type="button"
+                              className={`tone-${isRemoteInstalled(item.skillId, "codex") ? "good" : "plain"}`}
+                              disabled={isRemoteInstalled(item.skillId, "codex")}
+                              onClick={() => void installRemoteToLibrary(item, "codex")}
+                            >
+                              {isRemoteInstalled(item.skillId, "codex") ? "已安装" : "安装"} Codex
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              ) : null}
+
               <section ref={discoverSectionRef} className="mvp-section">
                 <div className="mvp-section-head">
                   <div>
-                    <span>ALL RESULTS</span>
-                    <h2>全部技能</h2>
+                    <span>{deferredSearch.length >= 2 ? "LOCAL MATCHES" : "ALL RESULTS"}</span>
+                    <h2>{deferredSearch.length >= 2 ? "本地已收录" : "全部技能"}</h2>
                     <p className="mvp-section-copy">
                       {filteredDiscover.length} 个结果，每页 {DISCOVER_PAGE_SIZE} 个，直接分页浏览，不再整页往下拖。
                     </p>
@@ -1273,6 +1487,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                         </div>
 
                         <div className="mvp-card-badges">
+                          <Badge tone={sourceTrustTone(item.trust.sourceTrust)}>
+                            {sourceTrustLabel(item.trust.sourceTrust)}
+                          </Badge>
                           {item.compatibility.includes("claude") ? (
                             <Badge tone="claude">Claude Code</Badge>
                           ) : null}
@@ -1570,6 +1787,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   <Badge tone={riskTone(activeDetail.skill.trust)}>
                     {riskLabel(activeDetail.skill.trust)}
                   </Badge>
+                  <Badge tone={sourceTrustTone(activeDetail.skill.trust.sourceTrust)}>
+                    {sourceTrustLabel(activeDetail.skill.trust.sourceTrust)}
+                  </Badge>
                   {activeDetail.skill.compatibility.includes("claude") ? (
                     <Badge tone="claude">Claude Code</Badge>
                   ) : null}
@@ -1595,7 +1815,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     <strong>{activePreview?.label ?? "未知来源"}</strong>
                   </article>
                   <article className="mvp-info-card">
-                    <span>兼容端</span>
+                    <span>可安装到</span>
                     <strong>
                       {activeDetail.skill.compatibility
                         .map((entry) =>
@@ -1613,6 +1833,36 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     <strong>{new Date(activeDetail.skill.updatedAt).toLocaleDateString()}</strong>
                   </article>
                 </div>
+
+                <div className="mvp-inline-tags mvp-risk-reasons">
+                  {activeDetail.skill.trust.riskReasons.map((reason) => (
+                    <span key={reason}>{reason}</span>
+                  ))}
+                </div>
+
+                {activeDetail.skill.trust.audit ? (
+                  <div className="mvp-inline-badges mvp-audit-strip">
+                    {activeDetail.skill.trust.audit.athRisk ? (
+                      <Badge tone="plain">ATH {activeDetail.skill.trust.audit.athRisk}</Badge>
+                    ) : null}
+                    {activeDetail.skill.trust.audit.socketRisk ? (
+                      <Badge tone="plain">
+                        Socket {activeDetail.skill.trust.audit.socketRisk}
+                        {typeof activeDetail.skill.trust.audit.socketAlerts === "number"
+                          ? ` · ${activeDetail.skill.trust.audit.socketAlerts} alerts`
+                          : ""}
+                      </Badge>
+                    ) : null}
+                    {activeDetail.skill.trust.audit.snykRisk ? (
+                      <Badge tone="plain">Snyk {activeDetail.skill.trust.audit.snykRisk}</Badge>
+                    ) : null}
+                    {activeDetail.skill.trust.audit.zeroleaksRisk ? (
+                      <Badge tone="plain">
+                        ZeroLeaks {activeDetail.skill.trust.audit.zeroleaksRisk}
+                      </Badge>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="mvp-card-tags drawer">
                   {getMetaTags(data, activeDetail.skill.id).length > 0 ? (

@@ -51,6 +51,20 @@ export type TrustProfile = {
   hasPackageJson: boolean;
   hasAgents: boolean;
   hasHomepage: boolean;
+  hasInstallHooks: boolean;
+  hasExecutableFiles: boolean;
+  riskReasons: string[];
+  sourceTrust: "official" | "community" | "local";
+  audit?: {
+    provider: "skills.sh";
+    source: string;
+    athRisk?: "safe" | "low" | "medium" | "high" | "critical";
+    socketRisk?: "safe" | "low" | "medium" | "high" | "critical";
+    socketAlerts?: number;
+    snykRisk?: "safe" | "low" | "medium" | "high" | "critical";
+    zeroleaksRisk?: "safe" | "low" | "medium" | "high" | "critical";
+    analyzedAt?: string;
+  };
 };
 
 export type SkillMetaRecord = {
@@ -150,6 +164,22 @@ export type DashboardData = {
   discoverSkills: DiscoverSkill[];
   workspaceSkills: WorkspaceSkill[];
   catalogSkills: CatalogSkill[];
+};
+
+export type RemoteDiscoverSkill = {
+  id: string;
+  skillId: string;
+  name: string;
+  description: string;
+  shortDescription: string;
+  source: string;
+  slug: string;
+  skillsUrl: string;
+  installs: number;
+  tags: string[];
+  homepage?: string;
+  compatibility: Array<"claude" | "codex">;
+  trust: TrustProfile;
 };
 
 export type SkillDetail = {

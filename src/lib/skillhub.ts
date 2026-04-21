@@ -19,6 +19,7 @@ import type {
   SkillHubConfig,
   SkillRecord,
   TrustProfile,
+  RemoteDiscoverSkill,
   WorkspaceSkill,
 } from "@/lib/skillhub-types";
 
@@ -64,6 +65,23 @@ const IGNORED_DIRECTORIES = new Set([
 
 const DETAIL_FILE_LIMIT = 120;
 const META_FILE = "skillhub.meta.json";
+const SEARCH_TIMEOUT_MS = 8000;
+const OFFICIAL_SOURCE_PREFIXES = [
+  "vercel-labs/",
+  "anthropics/",
+  "openai/",
+  "microsoft/",
+  "google/",
+  "github/",
+  "stripe/",
+  "expo/",
+  "remotion/",
+];
+const INSTALL_HOOK_NAMES = new Set(["preinstall", "install", "postinstall", "prepare"]);
+const EXECUTABLE_FILE_PATTERN =
+  /(^|\/)(scripts\/.+|bin\/.+|.+\.(sh|bash|zsh|command|ps1|py|rb|js|mjs|cjs|ts))$/i;
+const RISKY_SCRIPT_PATTERN =
+  /\b(curl|wget|bash|sh|node|python|pip|npm\s+(install|exec)|pnpm|yarn|bun|git\s+clone|osascript|chmod|rm\s+-rf)\b/i;
 const DISCOVER_SOURCES = [
   {
     id: "discover-claude",
@@ -434,38 +452,199 @@ function extractExplicitTags(value: unknown) {
   ).slice(0, 12);
 }
 
-async function buildTrustProfile(options: {
-  skillPath: string;
+function classifySourceTrust(sourceType: TrustProfile["sourceType"], source?: string) {
+  if (sourceType !== "discover" || !source) {
+    return "local" as const;
+  }
+
+  const normalized = source.toLowerCase();
+
+  return OFFICIAL_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+    ? ("official" as const)
+    : ("community" as const);
+}
+
+function normalizeAuditRisk(value?: string) {
+  if (
+    value === "safe" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "critical"
+  ) {
+    return value;
+  }
+
+  return undefined;
+}
+
+function rankRiskLevel(value: "low" | "medium" | "high") {
+  return value === "high" ? 3 : value === "medium" ? 2 : 1;
+}
+
+function mapAuditRiskToLevel(value?: string): "low" | "medium" | "high" {
+  const normalized = normalizeAuditRisk(value);
+
+  if (normalized === "critical" || normalized === "high") {
+    return "high";
+  }
+
+  if (normalized === "medium") {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function highestRiskLevel(levels: Array<"low" | "medium" | "high">) {
+  return levels.reduce<"low" | "medium" | "high">(
+    (current, level) => (rankRiskLevel(level) > rankRiskLevel(current) ? level : current),
+    "low",
+  );
+}
+
+function extractPackageScriptEntries(packageJson?: Record<string, unknown>) {
+  if (
+    !packageJson ||
+    typeof packageJson !== "object" ||
+    !("scripts" in packageJson) ||
+    !packageJson.scripts ||
+    typeof packageJson.scripts !== "object"
+  ) {
+    return [] as Array<{ name: string; command: string }>;
+  }
+
+  return Object.entries(packageJson.scripts as Record<string, unknown>)
+    .map(([name, command]) => ({
+      name: name.trim(),
+      command: typeof command === "string" ? command.trim() : "",
+    }))
+    .filter((entry) => entry.name.length > 0 && entry.command.length > 0);
+}
+
+function pickLatestAuditTimestamp(values: Array<string | undefined>) {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
+function buildTrustProfileFromInspection(options: {
   sourceType: TrustProfile["sourceType"];
-  commands: string[];
+  source?: string;
   packageJson?: Record<string, unknown>;
   homepage?: string;
+  hasAgents: boolean;
+  executableFiles: string[];
+  audit?: TrustProfile["audit"];
 }) {
+  const packageScripts = extractPackageScriptEntries(options.packageJson);
   const hasPackageJson = Boolean(options.packageJson);
-  const hasScripts =
-    options.commands.length > 0 ||
-    Boolean(
-      options.packageJson &&
-        typeof options.packageJson === "object" &&
-        "scripts" in options.packageJson,
-    ) ||
-    (await pathExists(path.join(options.skillPath, "scripts")));
-  const hasAgents = await pathExists(path.join(options.skillPath, "agents"));
   const hasHomepage = Boolean(options.homepage);
-  const riskLevel: TrustProfile["riskLevel"] = hasScripts
-    ? "high"
-    : hasPackageJson || hasHomepage
-      ? "medium"
-      : "low";
+  const hasInstallHooks = packageScripts.some((entry) => INSTALL_HOOK_NAMES.has(entry.name));
+  const hasRiskyPackageScripts = packageScripts.some((entry) =>
+    RISKY_SCRIPT_PATTERN.test(entry.command),
+  );
+  const hasExecutableFiles = options.executableFiles.length > 0;
+  const hasScripts = packageScripts.length > 0 || hasExecutableFiles;
+  const heuristicRisk: "low" | "medium" | "high" =
+    hasInstallHooks || hasRiskyPackageScripts || hasExecutableFiles
+      ? "high"
+      : packageScripts.length > 0 || hasPackageJson || hasHomepage || options.hasAgents
+        ? "medium"
+        : "low";
+  const auditRisk = highestRiskLevel([
+    mapAuditRiskToLevel(options.audit?.athRisk),
+    mapAuditRiskToLevel(options.audit?.socketRisk),
+    mapAuditRiskToLevel(options.audit?.snykRisk),
+    mapAuditRiskToLevel(options.audit?.zeroleaksRisk),
+    (options.audit?.socketAlerts ?? 0) > 0 ? "high" : "low",
+  ]);
+  const riskLevel = highestRiskLevel([heuristicRisk, auditRisk]);
+  const riskReasons: string[] = [];
+
+  if (hasInstallHooks) {
+    riskReasons.push("包含 npm 安装钩子");
+  }
+
+  if (hasRiskyPackageScripts) {
+    riskReasons.push("脚本会调用外部命令或包管理器");
+  }
+
+  if (hasExecutableFiles) {
+    riskReasons.push(`包含 ${Math.min(options.executableFiles.length, 8)} 个可执行脚本文件`);
+  }
+
+  if (packageScripts.length > 0 && !hasInstallHooks && !hasRiskyPackageScripts) {
+    riskReasons.push("包含 package.json scripts");
+  }
+
+  if (hasPackageJson && packageScripts.length === 0) {
+    riskReasons.push("包含 package.json");
+  }
+
+  if (hasHomepage) {
+    riskReasons.push("声明了外部仓库或主页");
+  }
+
+  if (options.hasAgents) {
+    riskReasons.push("包含 agents 目录");
+  }
+
+  if ((options.audit?.socketAlerts ?? 0) > 0) {
+    riskReasons.push(`Socket 审计发现 ${options.audit?.socketAlerts ?? 0} 个告警`);
+  }
+
+  if (mapAuditRiskToLevel(options.audit?.snykRisk) === "high") {
+    riskReasons.push("Snyk 审计结果偏高");
+  }
+
+  if (mapAuditRiskToLevel(options.audit?.athRisk) === "high") {
+    riskReasons.push("ATH 审计结果偏高");
+  }
+
+  if (riskReasons.length === 0) {
+    riskReasons.push("以文档与说明为主，没有发现可执行脚本");
+  }
 
   return {
     sourceType: options.sourceType,
     riskLevel,
     hasScripts,
     hasPackageJson,
-    hasAgents,
+    hasAgents: options.hasAgents,
     hasHomepage,
+    hasInstallHooks,
+    hasExecutableFiles,
+    riskReasons: unique(riskReasons),
+    sourceTrust: classifySourceTrust(options.sourceType, options.source),
+    audit: options.audit,
   } satisfies TrustProfile;
+}
+
+async function buildTrustProfile(options: {
+  skillPath: string;
+  sourceType: TrustProfile["sourceType"];
+  packageJson?: Record<string, unknown>;
+  homepage?: string;
+  source?: string;
+}) {
+  const [hasAgents, files] = await Promise.all([
+    pathExists(path.join(options.skillPath, "agents")),
+    collectFilesRecursive(options.skillPath),
+  ]);
+  const executableFiles = files
+    .map((filePath) => path.relative(options.skillPath, filePath))
+    .filter((filePath) => EXECUTABLE_FILE_PATTERN.test(filePath))
+    .slice(0, 12);
+
+  return buildTrustProfileFromInspection({
+    sourceType: options.sourceType,
+    source: options.source,
+    packageJson: options.packageJson,
+    homepage: options.homepage,
+    hasAgents,
+    executableFiles,
+  });
 }
 
 async function collectFilesRecursive(targetPath: string, bucket: string[] = []) {
@@ -648,9 +827,9 @@ async function scanSkillDirectory(
         : locationType === "catalog"
           ? "mirror"
           : "installed",
-    commands,
     packageJson,
     homepage,
+    source: library.id,
   });
 
   return {
@@ -943,6 +1122,300 @@ async function writeCatalogIndex(
   await fs.writeFile(indexPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function ensureGeneratedTags(
+  meta: SkillMetaState,
+  records: SkillRecord[],
+) {
+  const nextRecords = { ...meta.records };
+  const missingSkillIds = unique(
+    records
+      .map((record) => record.id)
+      .filter((skillId) => (nextRecords[skillId]?.generatedTags?.length ?? 0) === 0),
+  );
+
+  if (missingSkillIds.length === 0) {
+    return meta;
+  }
+
+  const recordsById = new Map<string, SkillRecord[]>();
+
+  records.forEach((record) => {
+    recordsById.set(record.id, [...(recordsById.get(record.id) ?? []), record]);
+  });
+
+  const updatedAt = new Date().toISOString();
+
+  await Promise.all(
+    missingSkillIds.map(async (skillId) => {
+      const skillRecords = recordsById.get(skillId) ?? [];
+      const texts = await Promise.all(skillRecords.map((record) => buildSmartTagText(record)));
+      const generatedTags = unique(
+        texts.flatMap((text, index) => {
+          const record = skillRecords[index];
+
+          if (!record) {
+            return [];
+          }
+
+          return inferSmartTagsFromText(text.length > 0 ? text : inferSmartTags(record).join(" "));
+        }),
+      );
+      const current = nextRecords[skillId] ?? {
+        tags: [],
+        generatedTags: [],
+        preferredSources: [],
+        updatedAt,
+      };
+
+      nextRecords[skillId] = {
+        ...current,
+        generatedTags,
+        updatedAt,
+      };
+    }),
+  );
+
+  await writeSkillMetaState(nextRecords);
+
+  return loadSkillMetaState();
+}
+
+async function fetchJsonWithTimeout<T>(url: string) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+type SkillsShSearchResponse = {
+  skills?: Array<{
+    id: string;
+    skillId: string;
+    name: string;
+    installs?: number;
+    source?: string;
+  }>;
+};
+
+type SkillsShDownloadResponse = {
+  files?: Array<{
+    path: string;
+    contents: string;
+  }>;
+  hash?: string;
+};
+
+type SkillsShAuditResponse = Record<
+  string,
+  {
+    ath?: { risk?: string; analyzedAt?: string };
+    socket?: { risk?: string; alerts?: number; analyzedAt?: string };
+    snyk?: { risk?: string; analyzedAt?: string };
+    zeroleaks?: { risk?: string; analyzedAt?: string };
+  }
+>;
+
+async function fetchSkillsShDownload(source: string, slug: string) {
+  const [owner, repo] = source.split("/");
+
+  if (!owner || !repo) {
+    throw new Error(`Invalid source: ${source}`);
+  }
+
+  return fetchJsonWithTimeout<SkillsShDownloadResponse>(
+    `https://skills.sh/api/download/${encodeURIComponent(owner)}/${encodeURIComponent(
+      repo,
+    )}/${encodeURIComponent(slug)}`,
+  );
+}
+
+async function fetchSkillsShAudit(entries: Array<{ source: string; skillId: string }>) {
+  const grouped = new Map<string, string[]>();
+
+  entries.forEach((entry) => {
+    grouped.set(entry.source, [...(grouped.get(entry.source) ?? []), entry.skillId]);
+  });
+
+  const audits = new Map<string, TrustProfile["audit"]>();
+
+  await Promise.all(
+    Array.from(grouped.entries()).map(async ([source, skillIds]) => {
+      try {
+        const payload = await fetchJsonWithTimeout<SkillsShAuditResponse>(
+          `https://add-skill.vercel.sh/audit?source=${encodeURIComponent(
+            source,
+          )}&skills=${encodeURIComponent(unique(skillIds).join(","))}`,
+        );
+
+        Object.entries(payload).forEach(([skillId, audit]) => {
+          audits.set(skillId, {
+            provider: "skills.sh",
+            source,
+            athRisk: normalizeAuditRisk(audit.ath?.risk),
+            socketRisk: normalizeAuditRisk(audit.socket?.risk),
+            socketAlerts: audit.socket?.alerts ?? 0,
+            snykRisk: normalizeAuditRisk(audit.snyk?.risk),
+            zeroleaksRisk: normalizeAuditRisk(audit.zeroleaks?.risk),
+            analyzedAt: pickLatestAuditTimestamp([
+              audit.ath?.analyzedAt,
+              audit.socket?.analyzedAt,
+              audit.snyk?.analyzedAt,
+              audit.zeroleaks?.analyzedAt,
+            ]),
+          });
+        });
+      } catch {
+        // Remote audit is best-effort; do not fail search when audit is unavailable.
+      }
+    }),
+  );
+
+  return audits;
+}
+
+function parseRemoteSkillFiles(files: Array<{ path: string; contents: string }>) {
+  const skillFile =
+    files.find((file) => file.path.toLowerCase() === "skill.md")?.contents ?? "";
+  const readmeFile =
+    files.find((file) => file.path.toLowerCase() === "readme.md")?.contents ?? "";
+  const packageJsonSource = files.find(
+    (file) => file.path.toLowerCase() === "package.json",
+  )?.contents;
+  const packageJson = packageJsonSource ? (JSON.parse(packageJsonSource) as Record<string, unknown>) : undefined;
+  const parsedSkill = matter(skillFile);
+  const frontmatter =
+    parsedSkill.data && typeof parsedSkill.data === "object"
+      ? (parsedSkill.data as Record<string, unknown>)
+      : {};
+  const bodyText = stripMarkdown(parsedSkill.content);
+  const readmeText = stripMarkdown(readmeFile);
+  const description =
+    toText(frontmatter.description) ??
+    toText(packageJson?.description) ??
+    createOptionalSnippet(readmeText, 280) ??
+    createOptionalSnippet(bodyText, 280) ??
+    "No description yet.";
+  const homepage =
+    toText(frontmatter.homepage) ??
+    getNestedText(frontmatter, ["metadata", "homepage"]) ??
+    getNestedText(frontmatter, ["metadata", "openclaw", "homepage"]) ??
+    toText(packageJson?.homepage) ??
+    getNestedText(packageJson ?? {}, ["repository", "url"]);
+
+  return {
+    skillFile,
+    readmeFile,
+    packageJson,
+    description,
+    homepage,
+  };
+}
+
+function buildRemoteDiscoverSkill(options: {
+  source: string;
+  slug: string;
+  searchId: string;
+  skillId: string;
+  installs: number;
+  files: Array<{ path: string; contents: string }>;
+  audit?: TrustProfile["audit"];
+}): RemoteDiscoverSkill | null {
+  const parsed = parseRemoteSkillFiles(options.files);
+
+  if (!parsed.skillFile) {
+    return null;
+  }
+
+  const tags = inferSmartTagsFromText(
+    [options.skillId, parsed.description, stripMarkdown(parsed.skillFile), stripMarkdown(parsed.readmeFile)].join(" "),
+  );
+  const trust = buildTrustProfileFromInspection({
+    sourceType: "discover",
+    source: options.source,
+    packageJson: parsed.packageJson,
+    homepage: parsed.homepage,
+    hasAgents: options.files.some((file) => file.path.startsWith("agents/")),
+    executableFiles: options.files
+      .map((file) => file.path)
+      .filter((filePath) => EXECUTABLE_FILE_PATTERN.test(filePath))
+      .slice(0, 12),
+    audit: options.audit,
+  });
+
+  return {
+    id: options.searchId,
+    skillId: options.skillId,
+    name: options.skillId,
+    description: parsed.description,
+    shortDescription: createSnippet(parsed.description, 120),
+    source: options.source,
+    slug: options.slug,
+    skillsUrl: `https://skills.sh/${options.searchId}`,
+    installs: options.installs,
+    tags,
+    homepage: parsed.homepage,
+    compatibility: ["claude", "codex"],
+    trust,
+  };
+}
+
+export async function searchRemoteDiscoverSkills(query: string) {
+  const trimmedQuery = query.trim();
+
+  if (trimmedQuery.length < 2) {
+    return [] as RemoteDiscoverSkill[];
+  }
+
+  const searchResponse = await fetchJsonWithTimeout<SkillsShSearchResponse>(
+    `https://skills.sh/api/search?q=${encodeURIComponent(trimmedQuery)}&limit=8`,
+  );
+  const matches = Array.isArray(searchResponse.skills) ? searchResponse.skills : [];
+
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const selected = matches.slice(0, 6);
+  const audits = await fetchSkillsShAudit(
+    selected.map((entry) => ({
+      source: entry.source ?? "",
+      skillId: entry.skillId,
+    })),
+  );
+  const downloads = await Promise.all(
+    selected.map(async (entry) => {
+      if (!entry.source) {
+        return null;
+      }
+
+      try {
+        const payload = await fetchSkillsShDownload(entry.source, entry.skillId);
+
+        return buildRemoteDiscoverSkill({
+          source: entry.source,
+          slug: entry.skillId,
+          searchId: entry.id,
+          skillId: entry.skillId,
+          installs: entry.installs ?? 0,
+          files: Array.isArray(payload.files) ? payload.files : [],
+          audit: audits.get(entry.skillId),
+        });
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return downloads
+    .filter((entry): entry is RemoteDiscoverSkill => Boolean(entry))
+    .sort((left, right) => right.installs - left.installs);
+}
+
 export async function getDashboardData(): Promise<DashboardData> {
   const config = await loadSkillHubConfig();
   await ensureCatalogDirectories(config);
@@ -979,12 +1452,13 @@ export async function getDashboardData(): Promise<DashboardData> {
     workspaceSkills,
     nextCatalogSkills,
   );
+  const nextMeta = await ensureGeneratedTags(meta, [...discoverSkills, ...workspaceSkills]);
 
   return {
     generatedAt: new Date().toISOString(),
     config,
     git,
-    meta,
+    meta: nextMeta,
     librarySummaries,
     summary: {
       libraries: config.libraries.length,
@@ -1267,7 +1741,7 @@ export async function installDiscoverSkill(
   }
 
   if (!sourceSkill.compatibility.includes(libraryId)) {
-    throw new Error(`${skillId} does not currently support ${libraryId}.`);
+    throw new Error(`当前还没有可直接安装到 ${library.label} 的收录版本。`);
   }
 
   const targetPath = path.join(library.path, skillId);
@@ -1276,6 +1750,53 @@ export async function installDiscoverSkill(
   await fs.mkdir(library.path, { recursive: true });
   await fs.rm(disabledPath, { recursive: true, force: true });
   await copyDirectory(sourceSkill.path, targetPath, new Set([".skillhub.json"]));
+
+  return getDashboardData();
+}
+
+export async function installRemoteDiscoverSkill(
+  source: string,
+  skillId: string,
+  libraryId: string,
+) {
+  const config = await loadSkillHubConfig();
+  const library = findLibrary(config, libraryId);
+  const payload = await fetchSkillsShDownload(source, skillId);
+  const files = Array.isArray(payload.files) ? payload.files : [];
+
+  if (files.length === 0) {
+    throw new Error(`没有拿到 ${skillId} 的远端文件。`);
+  }
+
+  const targetPath = path.join(library.path, skillId);
+  const disabledPath = path.join(getDisabledLibraryPath(library), skillId);
+
+  await fs.mkdir(targetPath, { recursive: true });
+  await fs.rm(targetPath, { recursive: true, force: true });
+  await fs.rm(disabledPath, { recursive: true, force: true });
+  await fs.mkdir(targetPath, { recursive: true });
+
+  await Promise.all(
+    files.map(async (file) => {
+      if (
+        typeof file.path !== "string" ||
+        typeof file.contents !== "string" ||
+        file.path.startsWith("/") ||
+        file.path.includes("..")
+      ) {
+        return;
+      }
+
+      const destinationPath = path.join(targetPath, file.path);
+
+      if (!isPathInside(targetPath, destinationPath)) {
+        throw new Error("远端文件路径不安全。");
+      }
+
+      await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+      await fs.writeFile(destinationPath, file.contents);
+    }),
+  );
 
   return getDashboardData();
 }
