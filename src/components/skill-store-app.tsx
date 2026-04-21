@@ -38,8 +38,10 @@ type PageTab = "discover" | "library";
 type LibraryTab = "claude" | "codex";
 type CompatibilityFilter = "all" | LibraryTab;
 type RiskFilter = "all" | "safe" | "scripted" | "high";
-type LibraryStateFilter = "all" | "enabled" | "disabled";
-type InstallState = "missing" | "enabled" | "disabled";
+type InstallState = "missing" | "installed";
+
+const DISCOVER_PAGE_SIZE = 12;
+const LIBRARY_PAGE_SIZE = 14;
 
 type DiscoverItem = {
   id: string;
@@ -57,7 +59,6 @@ type LibraryItem = {
   name: string;
   description: string;
   libraryId: LibraryTab;
-  state: "enabled" | "disabled";
   tags: string[];
   trust: WorkspaceSkill["trust"];
   record: WorkspaceSkill;
@@ -84,8 +85,45 @@ function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+function paginateItems<T>(items: T[], page: number, pageSize: number) {
+  const safePage = Math.max(1, page);
+  const start = (safePage - 1) * pageSize;
+
+  return items.slice(start, start + pageSize);
+}
+
 function getLibraryLabel(libraryId: LibraryTab) {
   return LIBRARY_LABELS[libraryId];
+}
+
+function scoreQuery(query: string, fields: string[]) {
+  const normalized = query.trim().toLowerCase();
+
+  if (!normalized) {
+    return 0;
+  }
+
+  return fields.reduce((score, field, index) => {
+    const value = field.toLowerCase();
+
+    if (!value) {
+      return score;
+    }
+
+    if (value === normalized || value === `/${normalized}`) {
+      return score + 140 - index * 2;
+    }
+
+    if (value.startsWith(normalized)) {
+      return score + 80 - index * 2;
+    }
+
+    if (value.includes(normalized)) {
+      return score + 32 - index;
+    }
+
+    return score;
+  }, 0);
 }
 
 function getMetaTags(data: DashboardData, skillId: string) {
@@ -145,16 +183,12 @@ function buildDiscoverItems(data: DashboardData): DiscoverItem[] {
         installState: {
           claude:
             installedByLibrary.get("claude")?.get(skillId) === "enabled"
-              ? "enabled"
-              : installedByLibrary.get("claude")?.get(skillId) === "disabled"
-                ? "disabled"
-                : "missing",
+              ? "installed"
+              : "missing",
           codex:
             installedByLibrary.get("codex")?.get(skillId) === "enabled"
-              ? "enabled"
-              : installedByLibrary.get("codex")?.get(skillId) === "disabled"
-                ? "disabled"
-                : "missing",
+              ? "installed"
+              : "missing",
         },
       } satisfies DiscoverItem;
     })
@@ -169,25 +203,18 @@ function buildLibraryItems(data: DashboardData, libraryId: LibraryTab): LibraryI
   });
 
   return data.workspaceSkills
-    .filter((skill) => skill.sourceId === libraryId)
+    .filter((skill) => skill.sourceId === libraryId && skill.libraryState === "enabled")
     .map((skill) => ({
       id: skill.id,
       name: skill.name,
       description: skill.description,
       libraryId,
-      state: skill.libraryState,
       tags: getMetaTags(data, skill.id),
       trust: skill.trust,
       record: skill,
       discoverSources: discoverById.get(skill.id) ?? [],
     }))
-    .sort((left, right) => {
-      if (left.state !== right.state) {
-        return left.state === "enabled" ? -1 : 1;
-      }
-
-      return left.name.localeCompare(right.name);
-    });
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function riskLabel(trust: DiscoverSkill["trust"]) {
@@ -222,17 +249,17 @@ function supportsLibrary(item: DiscoverItem, target: LibraryTab) {
   return item.compatibility.includes(target);
 }
 
+function canInstallTarget(item: DiscoverItem, target: LibraryTab) {
+  return supportsLibrary(item, target) && item.installState[target] !== "installed";
+}
+
 function installLabel(state: InstallState, supported: boolean) {
   if (!supported) {
     return "不兼容";
   }
 
-  if (state === "enabled") {
+  if (state === "installed") {
     return "已安装";
-  }
-
-  if (state === "disabled") {
-    return "已禁用";
   }
 
   return "安装";
@@ -243,12 +270,8 @@ function installTone(state: InstallState, supported: boolean) {
     return "disabled";
   }
 
-  if (state === "enabled") {
+  if (state === "installed") {
     return "good";
-  }
-
-  if (state === "disabled") {
-    return "warn";
   }
 
   return "plain";
@@ -297,6 +320,38 @@ function EmptyState({
   );
 }
 
+function Pagination({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) {
+    return null;
+  }
+
+  return (
+    <div className="mvp-pagination">
+      <button type="button" disabled={page <= 1} onClick={() => onChange(page - 1)}>
+        上一页
+      </button>
+      <span>
+        第 {page} / {totalPages} 页
+      </span>
+      <button
+        type="button"
+        disabled={page >= totalPages}
+        onClick={() => onChange(page + 1)}
+      >
+        下一页
+      </button>
+    </div>
+  );
+}
+
 export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [data, setData] = useState(initialData);
   const [pageTab, setPageTab] = useState<PageTab>("discover");
@@ -305,11 +360,11 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [compatibilityFilter, setCompatibilityFilter] =
     useState<CompatibilityFilter>("all");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
-  const [libraryStateFilter, setLibraryStateFilter] =
-    useState<LibraryStateFilter>("all");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
+  const [discoverPage, setDiscoverPage] = useState(1);
+  const [libraryPage, setLibraryPage] = useState(1);
   const [notice, setNotice] = useState<{
     kind: "success" | "error";
     text: string;
@@ -345,45 +400,74 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   );
 
   const filteredDiscover = useMemo(() => {
-    return discoverItems.filter((item) => {
-      if (
-        compatibilityFilter !== "all" &&
-        !item.compatibility.includes(compatibilityFilter)
-      ) {
-        return false;
-      }
+    return discoverItems
+      .filter((item) => {
+        if (
+          compatibilityFilter !== "all" &&
+          !item.compatibility.includes(compatibilityFilter)
+        ) {
+          return false;
+        }
 
-      if (riskFilter === "safe" && item.trust.riskLevel !== "low") {
-        return false;
-      }
+        if (riskFilter === "safe" && item.trust.riskLevel !== "low") {
+          return false;
+        }
 
-      if (riskFilter === "scripted" && !item.trust.hasScripts) {
-        return false;
-      }
+        if (riskFilter === "scripted" && !item.trust.hasScripts) {
+          return false;
+        }
 
-      if (riskFilter === "high" && item.trust.riskLevel !== "high") {
-        return false;
-      }
+        if (riskFilter === "high" && item.trust.riskLevel !== "high") {
+          return false;
+        }
 
-      if (selectedTag && !item.tags.includes(selectedTag)) {
-        return false;
-      }
+        if (selectedTag && !item.tags.includes(selectedTag)) {
+          return false;
+        }
 
-      if (!deferredSearch) {
-        return true;
-      }
+        if (!deferredSearch) {
+          return true;
+        }
 
-      return [
-        item.name,
-        item.description,
-        ...item.tags,
-        ...item.compatibility,
-        ...item.discoverSources.map((entry) => entry.discoverSourceLabel),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(deferredSearch);
-    });
+        return [
+          item.name,
+          item.description,
+          ...item.tags,
+          ...item.compatibility,
+          ...item.discoverSources.map((entry) => entry.discoverSourceLabel),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(deferredSearch);
+      })
+      .sort((left, right) => {
+        if (!deferredSearch) {
+          return left.name.localeCompare(right.name);
+        }
+
+        const leftScore = scoreQuery(deferredSearch, [
+          left.name,
+          `/${left.name}`,
+          ...left.tags,
+          left.description,
+          ...left.compatibility,
+          ...left.discoverSources.map((entry) => entry.discoverSourceLabel),
+        ]);
+        const rightScore = scoreQuery(deferredSearch, [
+          right.name,
+          `/${right.name}`,
+          ...right.tags,
+          right.description,
+          ...right.compatibility,
+          ...right.discoverSources.map((entry) => entry.discoverSourceLabel),
+        ]);
+
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+
+        return left.name.localeCompare(right.name);
+      });
   }, [
     compatibilityFilter,
     deferredSearch,
@@ -393,35 +477,79 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   ]);
 
   const filteredLibrary = useMemo(() => {
-    return libraryItems.filter((item) => {
-      if (libraryStateFilter !== "all" && item.state !== libraryStateFilter) {
-        return false;
-      }
+    return libraryItems
+      .filter((item) => {
+        if (selectedTag && !item.tags.includes(selectedTag)) {
+          return false;
+        }
 
-      if (selectedTag && !item.tags.includes(selectedTag)) {
-        return false;
-      }
+        if (!deferredSearch) {
+          return true;
+        }
 
-      if (!deferredSearch) {
-        return true;
-      }
+        return [
+          item.name,
+          item.description,
+          item.record.relativePath,
+          ...item.tags,
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(deferredSearch);
+      })
+      .sort((left, right) => {
+        if (!deferredSearch) {
+          return left.name.localeCompare(right.name);
+        }
 
-      return [
-        item.name,
-        item.description,
-        item.record.relativePath,
-        ...item.tags,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(deferredSearch);
-    });
-  }, [deferredSearch, libraryItems, libraryStateFilter, selectedTag]);
+        const leftScore = scoreQuery(deferredSearch, [
+          left.name,
+          `/${left.name}`,
+          ...left.tags,
+          left.description,
+          left.record.relativePath,
+        ]);
+        const rightScore = scoreQuery(deferredSearch, [
+          right.name,
+          `/${right.name}`,
+          ...right.tags,
+          right.description,
+          right.record.relativePath,
+        ]);
+
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+
+        return left.name.localeCompare(right.name);
+      });
+  }, [deferredSearch, libraryItems, selectedTag]);
 
   const featuredDiscover = filteredDiscover.slice(0, 6);
   const discoverTaggedCount = filteredDiscover.filter((item) => item.tags.length > 0).length;
   const libraryTaggedCount = filteredLibrary.filter((item) => item.tags.length > 0).length;
   const libraryScriptedCount = filteredLibrary.filter((item) => item.trust.hasScripts).length;
+  const libraryRiskCount = filteredLibrary.filter(
+    (item) => item.trust.riskLevel === "high",
+  ).length;
+  const discoverTotalPages = Math.max(
+    1,
+    Math.ceil(filteredDiscover.length / DISCOVER_PAGE_SIZE),
+  );
+  const libraryTotalPages = Math.max(
+    1,
+    Math.ceil(filteredLibrary.length / LIBRARY_PAGE_SIZE),
+  );
+  const pagedDiscover = paginateItems(
+    filteredDiscover,
+    Math.min(discoverPage, discoverTotalPages),
+    DISCOVER_PAGE_SIZE,
+  );
+  const pagedLibrary = paginateItems(
+    filteredLibrary,
+    Math.min(libraryPage, libraryTotalPages),
+    LIBRARY_PAGE_SIZE,
+  );
   const currentScopeIds = unique(
     (pageTab === "discover" ? filteredDiscover : filteredLibrary).map((item) => item.id),
   );
@@ -498,8 +626,53 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const nextPageTab = params.get("tab");
+    const nextLibraryTab = params.get("library");
+
+    if (nextPageTab === "discover" || nextPageTab === "library") {
+      setPageTab(nextPageTab);
+    }
+
+    if (nextLibraryTab === "claude" || nextLibraryTab === "codex") {
+      setLibraryTab(nextLibraryTab);
+    }
+  }, []);
+
+  useEffect(() => {
     setSelectedIds([]);
-  }, [libraryTab, libraryStateFilter, pageTab]);
+  }, [libraryTab, pageTab]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", pageTab);
+
+    if (pageTab === "library") {
+      params.set("library", libraryTab);
+    } else {
+      params.delete("library");
+    }
+
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+    window.history.replaceState(null, "", nextUrl);
+  }, [libraryTab, pageTab]);
+
+  useEffect(() => {
+    setDiscoverPage(1);
+  }, [compatibilityFilter, deferredSearch, riskFilter, selectedTag]);
+
+  useEffect(() => {
+    setLibraryPage(1);
+  }, [deferredSearch, libraryTab, selectedTag]);
 
   const drawerSources = useMemo(() => {
     if (!drawerTarget) {
@@ -664,21 +837,8 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     );
   }
 
-  async function toggleLibraryState(item: LibraryItem, enabled: boolean) {
-    await runAction(
-      "/api/actions/library-state",
-      {
-        skillId: item.id,
-        libraryId: item.libraryId,
-        enabled,
-      },
-      `library-state:${item.id}:${item.libraryId}:${enabled}`,
-      enabled ? `已启用 ${item.name}。` : `已禁用 ${item.name}。`,
-    );
-  }
-
   async function uninstallLibraryItem(item: LibraryItem) {
-    if (!window.confirm(`确认卸载 ${item.name} 吗？`)) {
+    if (!window.confirm(`确认从 ${getLibraryLabel(item.libraryId)} 删除 ${item.name} 吗？`)) {
       return;
     }
 
@@ -689,7 +849,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         libraryId: item.libraryId,
       },
       `uninstall:${item.id}:${item.libraryId}`,
-      `已卸载 ${item.name}。`,
+      `已删除 ${item.name}。`,
     );
   }
 
@@ -704,11 +864,11 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         skillIds,
       },
       `ai-tags:${skillIds.join(",")}`,
-      "AI 智能标签已生成。",
+      "智能标签已生成。",
     );
   }
 
-  async function batchLibraryAction(action: "enable" | "disable" | "uninstall" | "ai-tags") {
+  async function batchLibraryAction(action: "uninstall" | "ai-tags") {
     const targets = filteredLibrary.filter((item) => selectedIds.includes(item.id));
 
     if (targets.length === 0) {
@@ -725,30 +885,6 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
 
     try {
       for (const item of targets) {
-        if (action === "enable") {
-          await fetch("/api/actions/library-state", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              skillId: item.id,
-              libraryId: item.libraryId,
-              enabled: true,
-            }),
-          });
-        }
-
-        if (action === "disable") {
-          await fetch("/api/actions/library-state", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              skillId: item.id,
-              libraryId: item.libraryId,
-              enabled: false,
-            }),
-          });
-        }
-
         if (action === "uninstall") {
           await fetch("/api/actions/remove-library", {
             method: "POST",
@@ -765,12 +901,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
       await applyDashboard(nextDashboard);
       setNotice({
         kind: "success",
-        text:
-          action === "enable"
-            ? "批量启用完成。"
-            : action === "disable"
-              ? "批量禁用完成。"
-              : "批量卸载完成。",
+        text: "批量删除完成。",
       });
     } catch (error) {
       setNotice({
@@ -816,7 +947,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索 Claude Code / Codex skills 的名称、用途或 AI 标签…"
+              placeholder="搜索技能名称、用途、来源或标签…"
             />
           </label>
           <button
@@ -832,7 +963,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             ) : (
               <Sparkles size={16} />
             )}
-            AI 智能打标
+            生成标签
           </button>
           <div className="mvp-avatar">
             <UserCircle2 size={22} />
@@ -881,7 +1012,8 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   </strong>
                 </button>
                 <p className="mvp-sidebar-note">
-                  Discover 只负责“看懂和安装”，不再混入云端、镜像、同步中心这些概念。
+                  这一版先把本地 catalog 搜准、看清和装好；外部搜索后面再接 Vercel /
+                  find-skills。
                 </p>
               </section>
 
@@ -923,11 +1055,11 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               <section className="mvp-sidebar-card">
                 <div className="mvp-sidebar-title">
                   <Tags size={14} />
-                  AI 标签
+                  标签
                 </div>
                 <div className="mvp-tag-cloud">
                   {availableTags.length === 0 ? (
-                    <p>还没有 AI 标签。点右上角 `AI 智能打标` 生成。</p>
+                    <p>还没有标签。点右上角生成一次，后面就能按标签管理。</p>
                   ) : (
                     availableTags.map((tag) => (
                       <button
@@ -944,7 +1076,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   )}
                 </div>
                 <p className="mvp-sidebar-note">
-                  这里只保留语义标签，不会把 `Claude`、`Codex`、`含脚本` 这类状态硬塞进内容标签。
+                  标签只做分类管理，不把来源、兼容性、风险这类状态硬塞进去。
                 </p>
               </section>
             </>
@@ -960,11 +1092,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                       onClick={() => setLibraryTab(summary.id)}
                     >
                       {getLibraryLabel(summary.id)}
-                      <strong>{summary.enabledCount + summary.disabledCount}</strong>
+                      <strong>{summary.enabledCount}</strong>
                     </button>
-                    <p className="mvp-sidebar-meta">
-                      启用 {summary.enabledCount} · 禁用 {summary.disabledCount}
-                    </p>
+                    <p className="mvp-sidebar-meta">已安装 {summary.enabledCount}</p>
                   </div>
                 ))}
               </section>
@@ -973,45 +1103,24 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 <h3>管理状态</h3>
                 <button
                   type="button"
-                  className={libraryStateFilter === "all" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("all")}
+                  className="active"
                 >
                   全部
                   <strong>{libraryItems.length}</strong>
                 </button>
-                <button
-                  type="button"
-                  className={libraryStateFilter === "enabled" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("enabled")}
-                >
-                  已启用
-                  <strong>
-                    {libraryItems.filter((item) => item.state === "enabled").length}
-                  </strong>
-                </button>
-                <button
-                  type="button"
-                  className={libraryStateFilter === "disabled" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("disabled")}
-                >
-                  已禁用
-                  <strong>
-                    {libraryItems.filter((item) => item.state === "disabled").length}
-                  </strong>
-                </button>
                 <p className="mvp-sidebar-note">
-                  Library 只管理本机已安装 skills，支持批量启用、禁用、卸载和 AI 打标。
+                  Library 只管理本机已安装 skills，只保留删除动作，不再额外设计停用流。
                 </p>
               </section>
 
               <section className="mvp-sidebar-card">
                 <div className="mvp-sidebar-title">
                   <Tags size={14} />
-                  AI 标签
+                  标签
                 </div>
                 <div className="mvp-tag-cloud">
                   {availableTags.length === 0 ? (
-                    <p>先点右上角 `AI 智能打标`，再用标签筛选已安装库。</p>
+                    <p>先点右上角生成一次，再用标签筛选已安装库。</p>
                   ) : (
                     availableTags.map((tag) => (
                       <button
@@ -1028,7 +1137,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   )}
                 </div>
                 <p className="mvp-sidebar-note">
-                  AI 标签用来管理主题和用途，不承担兼容性、来源或风险提示的职责。
+                  标签先帮你整理第一遍，后面你只需要按标签管理，不用理解底层怎么生成。
                 </p>
               </section>
             </>
@@ -1078,7 +1187,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   </article>
                   <article>
                     <strong>{discoverTaggedCount}</strong>
-                    <span>已生成 AI 标签</span>
+                    <span>已有标签</span>
                   </article>
                 </div>
               </section>
@@ -1087,9 +1196,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 {featuredDiscover.map((item) => (
                   <article key={item.id} className="mvp-discover-card featured">
                     <div className="mvp-card-head">
-                      <div>
+                      <div className="mvp-card-copy">
                         <strong>/{item.name}</strong>
-                        <p>{item.description}</p>
+                        <p className="mvp-line-clamp-2">{item.description}</p>
                       </div>
                       <button
                         type="button"
@@ -1118,7 +1227,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                       {item.tags.length > 0 ? (
                         item.tags.map((tag) => <span key={tag}>{tag}</span>)
                       ) : (
-                        <span className="muted">未生成 AI 标签</span>
+                        <span className="muted">暂无标签</span>
                       )}
                     </div>
                     <div className="mvp-install-row">
@@ -1128,7 +1237,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                           item.installState.claude,
                           supportsLibrary(item, "claude"),
                         )}`}
-                        disabled={!supportsLibrary(item, "claude")}
+                        disabled={!canInstallTarget(item, "claude")}
                         onClick={() => void installToLibrary(item, "claude")}
                       >
                         <Download size={14} />
@@ -1144,7 +1253,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                           item.installState.codex,
                           supportsLibrary(item, "codex"),
                         )}`}
-                        disabled={!supportsLibrary(item, "codex")}
+                        disabled={!canInstallTarget(item, "codex")}
                         onClick={() => void installToLibrary(item, "codex")}
                       >
                         <Download size={14} />
@@ -1162,24 +1271,32 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               <section className="mvp-section">
                 <div className="mvp-section-head">
                   <div>
-                    <span>ALL SKILLS</span>
-                    <h2>应用商店视图</h2>
+                    <span>ALL RESULTS</span>
+                    <h2>全部技能</h2>
+                    <p className="mvp-section-copy">
+                      {filteredDiscover.length} 个结果，按搜索和标签过滤后分页浏览。
+                    </p>
                   </div>
+                  <Pagination
+                    page={Math.min(discoverPage, discoverTotalPages)}
+                    totalPages={discoverTotalPages}
+                    onChange={setDiscoverPage}
+                  />
                 </div>
 
                 {filteredDiscover.length === 0 ? (
                   <EmptyState
                     title="没有匹配的 skills"
-                    copy="换个搜索词，或者先点一次 AI 智能打标。"
+                    copy="换个搜索词，或者先点右上角生成标签。"
                   />
                 ) : (
                   <div className="mvp-discover-grid">
-                    {filteredDiscover.map((item) => (
+                    {pagedDiscover.map((item) => (
                       <article key={item.id} className="mvp-discover-card">
                         <div className="mvp-card-head">
-                          <div>
+                          <div className="mvp-card-copy">
                             <strong>/{item.name}</strong>
-                            <p>{item.description}</p>
+                            <p className="mvp-line-clamp-2">{item.description}</p>
                           </div>
                           <button
                             type="button"
@@ -1214,7 +1331,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                           {item.tags.length > 0 ? (
                             item.tags.map((tag) => <span key={tag}>{tag}</span>)
                           ) : (
-                            <span className="muted">未生成 AI 标签</span>
+                            <span className="muted">暂无标签</span>
                           )}
                         </div>
 
@@ -1225,7 +1342,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                               item.installState.claude,
                               supportsLibrary(item, "claude"),
                             )}`}
-                            disabled={!supportsLibrary(item, "claude")}
+                            disabled={!canInstallTarget(item, "claude")}
                             onClick={() => void installToLibrary(item, "claude")}
                           >
                             {installLabel(
@@ -1240,7 +1357,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                               item.installState.codex,
                               supportsLibrary(item, "codex"),
                             )}`}
-                            disabled={!supportsLibrary(item, "codex")}
+                            disabled={!canInstallTarget(item, "codex")}
                             onClick={() => void installToLibrary(item, "codex")}
                           >
                             {installLabel(
@@ -1254,6 +1371,12 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     ))}
                   </div>
                 )}
+
+                <Pagination
+                  page={Math.min(discoverPage, discoverTotalPages)}
+                  totalPages={discoverTotalPages}
+                  onChange={setDiscoverPage}
+                />
               </section>
             </>
           ) : null}
@@ -1265,18 +1388,18 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   <span>LIBRARY</span>
                   <h1>把 Claude Code 和 Codex 分开管理，不再混淆</h1>
                   <p>
-                    Library 只显示本机已安装的 skills。这里负责批量启用、批量禁用、批量卸载和
-                    AI 智能打标，方便你把两个端的技能库管干净。
+                    Library 只显示本机已安装的 skills。这里负责删除和标签管理，把两个端的技能库保持干净，
+                    详情预览统一放到抽屉里展开。
                   </p>
                 </div>
                 <div className="mvp-hero-metrics">
                   <article>
                     <strong>{activeSummary?.enabledCount ?? 0}</strong>
-                    <span>已启用</span>
+                    <span>已安装</span>
                   </article>
                   <article>
-                    <strong>{activeSummary?.disabledCount ?? 0}</strong>
-                    <span>已禁用</span>
+                    <strong>{libraryRiskCount}</strong>
+                    <span>高风险</span>
                   </article>
                   <article>
                     <strong>{libraryScriptedCount}</strong>
@@ -1284,7 +1407,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   </article>
                   <article>
                     <strong>{libraryTaggedCount}</strong>
-                    <span>已有 AI 标签</span>
+                    <span>已有标签</span>
                   </article>
                 </div>
               </section>
@@ -1306,51 +1429,36 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 </button>
               </div>
 
-              <div className="mvp-library-filters">
-                <button
-                  type="button"
-                  className={libraryStateFilter === "all" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("all")}
-                >
-                  全部
-                </button>
-                <button
-                  type="button"
-                  className={libraryStateFilter === "enabled" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("enabled")}
-                >
-                  已启用
-                </button>
-                <button
-                  type="button"
-                  className={libraryStateFilter === "disabled" ? "active" : ""}
-                  onClick={() => setLibraryStateFilter("disabled")}
-                >
-                  已禁用
-                </button>
-              </div>
-
               {selectedIds.length > 0 ? (
                 <div className="mvp-batch-bar">
                   <span>已选中 {selectedIds.length} 个 skills</span>
                   <div className="mvp-inline-actions">
-                    <button type="button" onClick={() => void batchLibraryAction("enable")}>
-                      批量启用
-                    </button>
-                    <button type="button" onClick={() => void batchLibraryAction("disable")}>
-                      批量禁用
-                    </button>
                     <button type="button" onClick={() => void batchLibraryAction("uninstall")}>
-                      批量卸载
+                      批量删除
                     </button>
                     <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
-                      AI 打标
+                      生成标签
                     </button>
                   </div>
                 </div>
               ) : null}
 
               <section className="mvp-section">
+                <div className="mvp-section-head">
+                  <div>
+                    <span>INSTALLED</span>
+                    <h2>{getLibraryLabel(libraryTab)} 已安装</h2>
+                    <p className="mvp-section-copy">
+                      {filteredLibrary.length} 个结果，简介收纳到两行，点查看再展开完整详情。
+                    </p>
+                  </div>
+                  <Pagination
+                    page={Math.min(libraryPage, libraryTotalPages)}
+                    totalPages={libraryTotalPages}
+                    onChange={setLibraryPage}
+                  />
+                </div>
+
                 {filteredLibrary.length === 0 ? (
                   <EmptyState
                     title="这个技能库里还没有匹配的 skills"
@@ -1364,14 +1472,13 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                           <th />
                           <th>Skill</th>
                           <th>用途</th>
-                          <th>AI 标签</th>
+                          <th>标签</th>
                           <th>Trust</th>
-                          <th>状态</th>
                           <th>操作</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredLibrary.map((item) => (
+                        {pagedLibrary.map((item) => (
                           <tr key={`${item.libraryId}:${item.id}`}>
                             <td>
                               <input
@@ -1392,7 +1499,11 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                                 <span>{item.record.relativePath}</span>
                               </div>
                             </td>
-                            <td>{item.description}</td>
+                            <td>
+                              <p className="mvp-table-description mvp-line-clamp-2">
+                                {item.description}
+                              </p>
+                            </td>
                             <td>
                               <div className="mvp-inline-tags">
                                 {item.tags.length > 0 ? (
@@ -1413,11 +1524,6 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                               </div>
                             </td>
                             <td>
-                              <Badge tone={item.state === "enabled" ? "good" : "warn"}>
-                                {item.state === "enabled" ? "已启用" : "已禁用"}
-                              </Badge>
-                            </td>
-                            <td>
                               <div className="mvp-inline-actions">
                                 <button
                                   type="button"
@@ -1431,33 +1537,18 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                                 >
                                   查看
                                 </button>
-                                {item.state === "enabled" ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => void toggleLibraryState(item, false)}
-                                  >
-                                    禁用
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => void toggleLibraryState(item, true)}
-                                  >
-                                    启用
-                                  </button>
-                                )}
                                 <button
                                   type="button"
                                   onClick={() => void generateTags([item.id])}
                                 >
-                                  AI 标签
+                                  标签
                                 </button>
                                 <button
                                   type="button"
                                   className="danger"
                                   onClick={() => void uninstallLibraryItem(item)}
                                 >
-                                  卸载
+                                  删除
                                 </button>
                               </div>
                             </td>
@@ -1467,6 +1558,12 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     </table>
                   </div>
                 )}
+
+                <Pagination
+                  page={Math.min(libraryPage, libraryTotalPages)}
+                  totalPages={libraryTotalPages}
+                  onChange={setLibraryPage}
+                />
               </section>
             </>
           ) : null}
@@ -1560,7 +1657,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                       <span key={tag}>{tag}</span>
                     ))
                   ) : (
-                    <span className="muted">还没有 AI 标签</span>
+                    <span className="muted">还没有标签</span>
                   )}
                 </div>
 
@@ -1569,25 +1666,29 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     <>
                       <button
                         type="button"
-                        disabled={!supportsLibrary(activeDrawerDiscoverItem, "claude")}
+                        disabled={!canInstallTarget(activeDrawerDiscoverItem, "claude")}
                         className={`tone-${installTone(
                           activeDrawerDiscoverItem.installState.claude,
                           supportsLibrary(activeDrawerDiscoverItem, "claude"),
                         )}`}
                         onClick={() => void installToLibrary(activeDrawerDiscoverItem, "claude")}
                       >
-                        安装到 Claude
+                        {activeDrawerDiscoverItem.installState.claude === "installed"
+                          ? "Claude 已安装"
+                          : "安装到 Claude"}
                       </button>
                       <button
                         type="button"
-                        disabled={!supportsLibrary(activeDrawerDiscoverItem, "codex")}
+                        disabled={!canInstallTarget(activeDrawerDiscoverItem, "codex")}
                         className={`tone-${installTone(
                           activeDrawerDiscoverItem.installState.codex,
                           supportsLibrary(activeDrawerDiscoverItem, "codex"),
                         )}`}
                         onClick={() => void installToLibrary(activeDrawerDiscoverItem, "codex")}
                       >
-                        安装到 Codex
+                        {activeDrawerDiscoverItem.installState.codex === "installed"
+                          ? "Codex 已安装"
+                          : "安装到 Codex"}
                       </button>
                     </>
                   ) : null}
@@ -1596,20 +1697,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     <>
                       <button
                         type="button"
-                        onClick={() =>
-                          void toggleLibraryState(
-                            activeDrawerLibraryItem,
-                            activeDrawerLibraryItem.state !== "enabled",
-                          )
-                        }
-                      >
-                        {activeDrawerLibraryItem.state === "enabled" ? "禁用" : "启用"}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => void uninstallLibraryItem(activeDrawerLibraryItem)}
                       >
-                        卸载
+                        删除
                       </button>
                     </>
                   ) : null}
@@ -1619,7 +1709,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     onClick={() => void generateTags([activeDetail.skill.id])}
                   >
                     <Sparkles size={14} />
-                    AI 智能打标
+                    生成标签
                   </button>
                 </div>
 
