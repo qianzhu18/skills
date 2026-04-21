@@ -42,6 +42,20 @@ export type SkillRecord = {
   locationType: "library" | "catalog";
 };
 
+export type SkillMetaRecord = {
+  note?: string;
+  tags: string[];
+  trashed?: boolean;
+  preferredSources?: string[];
+  updatedAt: string;
+};
+
+export type SkillMetaState = {
+  records: Record<string, SkillMetaRecord>;
+  tagCatalog: string[];
+  trashedCount: number;
+};
+
 export type LibrarySummary = {
   id: string;
   label: string;
@@ -102,6 +116,7 @@ export type DashboardData = {
   generatedAt: string;
   config: SkillHubConfig;
   git: GitStatus;
+  meta: SkillMetaState;
   librarySummaries: LibrarySummary[];
   summary: {
     libraries: number;

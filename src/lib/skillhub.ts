@@ -12,6 +12,8 @@ import type {
   DashboardData,
   LibraryConfig,
   LibrarySummary,
+  SkillMetaRecord,
+  SkillMetaState,
   SkillDetail,
   SkillHubConfig,
   SkillRecord,
@@ -59,6 +61,7 @@ const IGNORED_DIRECTORIES = new Set([
 ]);
 
 const DETAIL_FILE_LIMIT = 120;
+const META_FILE = "skillhub.meta.json";
 
 async function pathExists(targetPath: string) {
   try {
@@ -179,6 +182,96 @@ async function ensureCatalogDirectories(config: SkillHubConfig) {
   await fs.mkdir(path.dirname(resolveFromRepo(config.catalog.indexFile)), {
     recursive: true,
   });
+}
+
+async function loadSkillMetaState(): Promise<SkillMetaState> {
+  const metaPath = resolveFromRepo(META_FILE);
+
+  if (!(await pathExists(metaPath))) {
+    return {
+      records: {},
+      tagCatalog: [],
+      trashedCount: 0,
+    };
+  }
+
+  const raw = await fs.readFile(metaPath, "utf8");
+  const parsed = JSON.parse(raw) as {
+    records?: Record<string, Partial<SkillMetaRecord>>;
+  };
+  const entries = Object.entries(parsed.records ?? {}).map(([skillId, value]) => {
+    const tags = Array.isArray(value.tags)
+      ? value.tags
+          .map((tag) => String(tag).trim())
+          .filter(Boolean)
+      : [];
+
+    return [
+      skillId,
+      {
+        note: typeof value.note === "string" ? value.note.trim() || undefined : undefined,
+        tags,
+        trashed: Boolean(value.trashed),
+        preferredSources: Array.isArray(value.preferredSources)
+          ? value.preferredSources.map((entry) => String(entry).trim()).filter(Boolean)
+          : [],
+        updatedAt:
+          typeof value.updatedAt === "string" && value.updatedAt
+            ? value.updatedAt
+            : new Date().toISOString(),
+      } satisfies SkillMetaRecord,
+    ] as const;
+  });
+
+  const records = Object.fromEntries(entries);
+  const tagCatalog = Array.from(
+    new Set(
+      Object.values(records)
+        .flatMap((record) => record.tags)
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+  const trashedCount = Object.values(records).filter((record) => record.trashed).length;
+
+  return {
+    records,
+    tagCatalog,
+    trashedCount,
+  };
+}
+
+async function writeSkillMetaState(records: Record<string, SkillMetaRecord>) {
+  const metaPath = resolveFromRepo(META_FILE);
+  const normalizedEntries = Object.entries(records)
+    .map(([skillId, record]) => {
+      const nextRecord: SkillMetaRecord = {
+        note: record.note?.trim() || undefined,
+        tags: Array.from(new Set(record.tags.map((tag) => tag.trim()).filter(Boolean))).sort(
+          (left, right) => left.localeCompare(right),
+        ),
+        trashed: Boolean(record.trashed),
+        preferredSources: Array.from(
+          new Set((record.preferredSources ?? []).map((value) => value.trim()).filter(Boolean)),
+        ),
+        updatedAt: record.updatedAt || new Date().toISOString(),
+      };
+
+      return [skillId, nextRecord] as const;
+    })
+    .filter(
+      ([, record]) =>
+        Boolean(record.note) ||
+        record.tags.length > 0 ||
+        Boolean(record.trashed) ||
+        (record.preferredSources?.length ?? 0) > 0,
+    );
+  const normalized = Object.fromEntries(normalizedEntries);
+
+  await fs.writeFile(
+    metaPath,
+    `${JSON.stringify({ updatedAt: new Date().toISOString(), records: normalized }, null, 2)}\n`,
+  );
 }
 
 function toText(value: unknown): string | undefined {
@@ -728,10 +821,11 @@ export async function getDashboardData(): Promise<DashboardData> {
   const config = await loadSkillHubConfig();
   await ensureCatalogDirectories(config);
 
-  const [workspaceGroups, catalogGroup, git] = await Promise.all([
+  const [workspaceGroups, catalogGroup, git, meta] = await Promise.all([
     Promise.all(config.libraries.map((library) => scanLibrarySkills(library))),
     scanCatalogSkills(config),
     getGitStatus(config.catalog.remoteRepoUrl),
+    loadSkillMetaState(),
   ]);
 
   const workspaceSkills = workspaceGroups.flat();
@@ -760,6 +854,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     generatedAt: new Date().toISOString(),
     config,
     git,
+    meta,
     librarySummaries,
     summary: {
       libraries: config.libraries.length,
@@ -780,6 +875,53 @@ export async function getDashboardData(): Promise<DashboardData> {
     workspaceSkills: nextWorkspaceSkills,
     catalogSkills: nextCatalogSkills,
   };
+}
+
+export async function updateSkillMetadata(
+  skillIds: string[],
+  changes: Partial<Omit<SkillMetaRecord, "updatedAt">>,
+  options?: {
+    mergeTags?: boolean;
+  },
+) {
+  const meta = await loadSkillMetaState();
+  const nextRecords = { ...meta.records };
+  const updatedAt = new Date().toISOString();
+
+  skillIds.forEach((skillId) => {
+    const current = nextRecords[skillId] ?? {
+      tags: [],
+      preferredSources: [],
+      updatedAt,
+    };
+    const nextTags =
+      changes.tags === undefined
+        ? current.tags
+        : options?.mergeTags
+          ? Array.from(new Set([...current.tags, ...changes.tags]))
+          : changes.tags;
+    const nextPreferredSources =
+      changes.preferredSources === undefined
+        ? current.preferredSources ?? []
+        : changes.preferredSources;
+
+    nextRecords[skillId] = {
+      note:
+        changes.note === undefined
+          ? current.note
+          : changes.note.trim()
+            ? changes.note.trim()
+            : undefined,
+      tags: nextTags,
+      trashed: changes.trashed === undefined ? current.trashed : changes.trashed,
+      preferredSources: nextPreferredSources,
+      updatedAt,
+    };
+  });
+
+  await writeSkillMetaState(nextRecords);
+
+  return getDashboardData();
 }
 
 function isPathInside(rootPath: string, targetPath: string) {
