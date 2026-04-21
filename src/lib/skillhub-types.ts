@@ -39,12 +39,24 @@ export type SkillRecord = {
   hash: string;
   sourceId: string;
   sourceLabel: string;
-  locationType: "library" | "catalog";
+  compatibility: string[];
+  trust: TrustProfile;
+  locationType: "library" | "catalog" | "discover";
+};
+
+export type TrustProfile = {
+  sourceType: "discover" | "installed" | "mirror";
+  riskLevel: "low" | "medium" | "high";
+  hasScripts: boolean;
+  hasPackageJson: boolean;
+  hasAgents: boolean;
+  hasHomepage: boolean;
 };
 
 export type SkillMetaRecord = {
   note?: string;
   tags: string[];
+  generatedTags?: string[];
   trashed?: boolean;
   preferredSources?: string[];
   updatedAt: string;
@@ -62,6 +74,8 @@ export type LibrarySummary = {
   path: string;
   description?: string;
   skillCount: number;
+  enabledCount: number;
+  disabledCount: number;
   syncedCount: number;
   changedCount: number;
   missingCount: number;
@@ -83,9 +97,16 @@ export type CatalogManifest = {
 
 export type WorkspaceSkill = SkillRecord & {
   locationType: "library";
+  libraryState: "enabled" | "disabled";
   catalogStatus: "missing" | "synced" | "changed";
   catalogPath?: string;
   catalogImportedFrom?: string;
+};
+
+export type DiscoverSkill = SkillRecord & {
+  locationType: "discover";
+  discoverSourceId: string;
+  discoverSourceLabel: string;
 };
 
 export type InstallationState = "missing" | "installed" | "update-available";
@@ -120,11 +141,13 @@ export type DashboardData = {
   librarySummaries: LibrarySummary[];
   summary: {
     libraries: number;
+    discoverSkills: number;
     workspaceSkills: number;
     catalogSkills: number;
     pendingImports: number;
     pendingInstalls: number;
   };
+  discoverSkills: DiscoverSkill[];
   workspaceSkills: WorkspaceSkill[];
   catalogSkills: CatalogSkill[];
 };

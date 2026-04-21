@@ -10,6 +10,7 @@ import type {
   CatalogManifest,
   CatalogSkill,
   DashboardData,
+  DiscoverSkill,
   LibraryConfig,
   LibrarySummary,
   SkillMetaRecord,
@@ -17,6 +18,7 @@ import type {
   SkillDetail,
   SkillHubConfig,
   SkillRecord,
+  TrustProfile,
   WorkspaceSkill,
 } from "@/lib/skillhub-types";
 
@@ -24,7 +26,7 @@ const DEFAULT_CONFIG: SkillHubConfig = {
   catalog: {
     title: "Qianzhu Skill Manager",
     description:
-      "Manage Claude and Codex skills with a cleaner library view, preview pane, and GitHub-backed catalog.",
+      "Discover skills from curated sources and manage local Claude/Codex libraries with install, trust, and batch controls.",
     remoteRepoUrl: "https://github.com/qianzhu18/skills",
     defaultBranch: "main",
     directory: "catalog/skills",
@@ -62,6 +64,20 @@ const IGNORED_DIRECTORIES = new Set([
 
 const DETAIL_FILE_LIMIT = 120;
 const META_FILE = "skillhub.meta.json";
+const DISCOVER_SOURCES = [
+  {
+    id: "discover-claude",
+    label: "Claude Code Source",
+    path: "backups/claude-code",
+    compatibility: ["claude"],
+  },
+  {
+    id: "discover-codex",
+    label: "Codex Source",
+    path: "backups/codex",
+    compatibility: ["codex"],
+  },
+] as const;
 
 async function pathExists(targetPath: string) {
   try {
@@ -74,6 +90,10 @@ async function pathExists(targetPath: string) {
 
 function resolveFromRepo(relativePath: string) {
   return path.resolve(/* turbopackIgnore: true */ process.cwd(), relativePath);
+}
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function mergeConfig(input?: Partial<SkillHubConfig>): SkillHubConfig {
@@ -205,12 +225,18 @@ async function loadSkillMetaState(): Promise<SkillMetaState> {
           .map((tag) => String(tag).trim())
           .filter(Boolean)
       : [];
+    const generatedTags = Array.isArray(value.generatedTags)
+      ? value.generatedTags
+          .map((tag) => String(tag).trim())
+          .filter(Boolean)
+      : [];
 
     return [
       skillId,
       {
         note: typeof value.note === "string" ? value.note.trim() || undefined : undefined,
         tags,
+        generatedTags,
         trashed: Boolean(value.trashed),
         preferredSources: Array.isArray(value.preferredSources)
           ? value.preferredSources.map((entry) => String(entry).trim()).filter(Boolean)
@@ -227,7 +253,7 @@ async function loadSkillMetaState(): Promise<SkillMetaState> {
   const tagCatalog = Array.from(
     new Set(
       Object.values(records)
-        .flatMap((record) => record.tags)
+        .flatMap((record) => [...record.tags, ...(record.generatedTags ?? [])])
         .map((tag) => tag.trim())
         .filter(Boolean),
     ),
@@ -250,6 +276,9 @@ async function writeSkillMetaState(records: Record<string, SkillMetaRecord>) {
         tags: Array.from(new Set(record.tags.map((tag) => tag.trim()).filter(Boolean))).sort(
           (left, right) => left.localeCompare(right),
         ),
+        generatedTags: Array.from(
+          new Set((record.generatedTags ?? []).map((tag) => tag.trim()).filter(Boolean)),
+        ).sort((left, right) => left.localeCompare(right)),
         trashed: Boolean(record.trashed),
         preferredSources: Array.from(
           new Set((record.preferredSources ?? []).map((value) => value.trim()).filter(Boolean)),
@@ -263,6 +292,7 @@ async function writeSkillMetaState(records: Record<string, SkillMetaRecord>) {
       ([, record]) =>
         Boolean(record.note) ||
         record.tags.length > 0 ||
+        (record.generatedTags?.length ?? 0) > 0 ||
         Boolean(record.trashed) ||
         (record.preferredSources?.length ?? 0) > 0,
     );
@@ -390,13 +420,52 @@ function extractCommands(value: unknown) {
     .filter((entry): entry is string => Boolean(entry));
 }
 
-function buildTags(skillId: string, sourceId: string, commands: string[]) {
-  const values = [skillId, sourceId, ...commands]
-    .flatMap((entry) => entry.split(/[\s/_-]+/))
-    .map((entry) => entry.toLowerCase().trim())
-    .filter((entry) => entry.length > 1);
+function extractExplicitTags(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
 
-  return Array.from(new Set(values)).slice(0, 12);
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .filter(Boolean),
+    ),
+  ).slice(0, 12);
+}
+
+async function buildTrustProfile(options: {
+  skillPath: string;
+  sourceType: TrustProfile["sourceType"];
+  commands: string[];
+  packageJson?: Record<string, unknown>;
+  homepage?: string;
+}) {
+  const hasPackageJson = Boolean(options.packageJson);
+  const hasScripts =
+    options.commands.length > 0 ||
+    Boolean(
+      options.packageJson &&
+        typeof options.packageJson === "object" &&
+        "scripts" in options.packageJson,
+    ) ||
+    (await pathExists(path.join(options.skillPath, "scripts")));
+  const hasAgents = await pathExists(path.join(options.skillPath, "agents"));
+  const hasHomepage = Boolean(options.homepage);
+  const riskLevel: TrustProfile["riskLevel"] = hasScripts
+    ? "high"
+    : hasPackageJson || hasHomepage
+      ? "medium"
+      : "low";
+
+  return {
+    sourceType: options.sourceType,
+    riskLevel,
+    hasScripts,
+    hasPackageJson,
+    hasAgents,
+    hasHomepage,
+  } satisfies TrustProfile;
 }
 
 async function collectFilesRecursive(targetPath: string, bucket: string[] = []) {
@@ -519,7 +588,8 @@ async function readTextIfExists(filePath?: string) {
 async function scanSkillDirectory(
   skillPath: string,
   library: Pick<LibraryConfig, "id" | "label" | "path">,
-  locationType: "library" | "catalog",
+  locationType: "library" | "catalog" | "discover",
+  compatibilityOverride?: string[],
 ): Promise<SkillRecord> {
   const skillFile = path.join(skillPath, "SKILL.md");
   const readmeFile = (await pathExists(path.join(skillPath, "README.md")))
@@ -555,6 +625,33 @@ async function scanSkillDirectory(
   const commands = extractCommands(frontmatter.commands);
   const triggers = extractTriggers(description, bodyText, readmeText);
   const stats = await collectDirectoryStats(skillPath);
+  const compatibility = compatibilityOverride
+    ? compatibilityOverride
+    : library.id === "claude"
+      ? ["claude"]
+      : library.id === "codex"
+        ? ["codex"]
+        : library.id === "agents"
+          ? ["claude", "codex"]
+          : [];
+  const homepage =
+    toText(frontmatter.homepage) ??
+    getNestedText(frontmatter, ["metadata", "homepage"]) ??
+    getNestedText(frontmatter, ["metadata", "openclaw", "homepage"]) ??
+    toText(packageJson?.homepage) ??
+    getNestedText(packageJson ?? {}, ["repository", "url"]);
+  const trust = await buildTrustProfile({
+    skillPath,
+    sourceType:
+      locationType === "discover"
+        ? "discover"
+        : locationType === "catalog"
+          ? "mirror"
+          : "installed",
+    commands,
+    packageJson,
+    homepage,
+  });
 
   return {
     key: `${library.id}:${skillId}:${path.relative(library.path, skillPath)}`,
@@ -563,15 +660,10 @@ async function scanSkillDirectory(
     description,
     shortDescription: createSnippet(description, 120),
     version: toText(frontmatter.version) ?? toText(packageJson?.version),
-    homepage:
-      toText(frontmatter.homepage) ??
-      getNestedText(frontmatter, ["metadata", "homepage"]) ??
-      getNestedText(frontmatter, ["metadata", "openclaw", "homepage"]) ??
-      toText(packageJson?.homepage) ??
-      getNestedText(packageJson ?? {}, ["repository", "url"]),
+    homepage,
     commands,
     triggers,
-    tags: buildTags(skillId, library.id, commands),
+    tags: extractExplicitTags(frontmatter.tags),
     path: skillPath,
     relativePath: path.relative(process.cwd(), skillPath),
     skillFile,
@@ -583,23 +675,96 @@ async function scanSkillDirectory(
     hash: stats.hash,
     sourceId: library.id,
     sourceLabel: library.label,
+    compatibility,
+    trust,
     locationType,
   };
 }
 
-async function scanLibrarySkills(library: LibraryConfig) {
-  if (!(await pathExists(library.path))) {
+function getDisabledLibraryPath(library: LibraryConfig) {
+  return path.join(path.dirname(library.path), ".skillhub-disabled", library.id);
+}
+
+async function scanLibrarySkillsFromRoot(
+  library: LibraryConfig,
+  rootPath: string,
+  libraryState: WorkspaceSkill["libraryState"],
+) {
+  if (!(await pathExists(rootPath))) {
     return [];
   }
 
-  const directories = await findSkillDirectories(library.path);
+  const directories = await findSkillDirectories(rootPath);
   const skills = await Promise.all(
-    directories.map((directory) =>
-      scanSkillDirectory(directory, library, "library"),
-    ),
+    directories.map(async (directory) => {
+      const record = await scanSkillDirectory(
+        directory,
+        {
+          ...library,
+          path: rootPath,
+        },
+        "library",
+      );
+
+      return {
+        ...record,
+        locationType: "library" as const,
+        libraryState,
+        catalogStatus: "missing" as const,
+      } satisfies WorkspaceSkill;
+    }),
   );
 
   return skills.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function scanLibrarySkills(library: LibraryConfig) {
+  const [enabledSkills, disabledSkills] = await Promise.all([
+    scanLibrarySkillsFromRoot(library, library.path, "enabled"),
+    scanLibrarySkillsFromRoot(library, getDisabledLibraryPath(library), "disabled"),
+  ]);
+
+  return [...enabledSkills, ...disabledSkills].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+async function scanDiscoverSkills(): Promise<DiscoverSkill[]> {
+  const skills = await Promise.all(
+    DISCOVER_SOURCES.map(async (source) => {
+      const rootPath = resolveFromRepo(source.path);
+
+      if (!(await pathExists(rootPath))) {
+        return [] as DiscoverSkill[];
+      }
+
+      const directories = await findSkillDirectories(rootPath);
+
+      return Promise.all(
+        directories.map(async (directory) => {
+          const record = await scanSkillDirectory(
+            directory,
+            {
+              id: source.id,
+              label: source.label,
+              path: rootPath,
+            },
+            "discover",
+            [...source.compatibility],
+          );
+
+          return {
+            ...record,
+            locationType: "discover" as const,
+            discoverSourceId: source.id,
+            discoverSourceLabel: source.label,
+          } satisfies DiscoverSkill;
+        }),
+      );
+    }),
+  );
+
+  return skills.flat().sort((left, right) => left.name.localeCompare(right.name));
 }
 
 async function readCatalogManifest(
@@ -644,52 +809,6 @@ async function scanCatalogSkills(config: SkillHubConfig) {
   );
 
   return skills.sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function buildWorkspaceSkills(
-  workspaceSkills: SkillRecord[],
-  catalogSkills: Array<SkillRecord & { manifest?: CatalogManifest }>,
-): WorkspaceSkill[] {
-  const catalogById = new Map(catalogSkills.map((skill) => [skill.id, skill]));
-  const statusRank = {
-    changed: 0,
-    missing: 1,
-    synced: 2,
-  } as const;
-
-  return workspaceSkills
-    .map((skill) => {
-      const catalogSkill = catalogById.get(skill.id);
-
-      if (!catalogSkill) {
-        return {
-          ...skill,
-          locationType: "library" as const,
-          catalogStatus: "missing" as const,
-        };
-      }
-
-      return {
-        ...skill,
-        locationType: "library" as const,
-        catalogStatus:
-          catalogSkill.manifest?.importedFrom?.hash === skill.hash
-            ? ("synced" as const)
-            : ("changed" as const),
-        catalogPath: catalogSkill.path,
-        catalogImportedFrom: catalogSkill.manifest?.importedFrom?.libraryLabel,
-      };
-    })
-    .sort((left, right) => {
-      const statusDifference =
-        statusRank[left.catalogStatus] - statusRank[right.catalogStatus];
-
-      if (statusDifference !== 0) {
-        return statusDifference;
-      }
-
-      return left.name.localeCompare(right.name);
-    });
 }
 
 function buildCatalogSkills(
@@ -759,7 +878,12 @@ function buildLibrarySummaries(
   catalogSkills: CatalogSkill[],
 ): LibrarySummary[] {
   return libraries.map((library) => {
-    const items = workspaceSkills.filter((skill) => skill.sourceId === library.id);
+    const items = workspaceSkills.filter(
+      (skill) => skill.sourceId === library.id && skill.libraryState === "enabled",
+    );
+    const disabledItems = workspaceSkills.filter(
+      (skill) => skill.sourceId === library.id && skill.libraryState === "disabled",
+    );
     const updateAvailableCount = catalogSkills.filter((skill) =>
       skill.installations.some(
         (installation) =>
@@ -774,6 +898,8 @@ function buildLibrarySummaries(
       path: library.path,
       description: library.description,
       skillCount: items.length,
+      enabledCount: items.length,
+      disabledCount: disabledItems.length,
       syncedCount: items.filter((skill) => skill.catalogStatus === "synced").length,
       changedCount: items.filter((skill) => skill.catalogStatus === "changed").length,
       missingCount: items.filter((skill) => skill.catalogStatus === "missing").length,
@@ -821,9 +947,10 @@ export async function getDashboardData(): Promise<DashboardData> {
   const config = await loadSkillHubConfig();
   await ensureCatalogDirectories(config);
 
-  const [workspaceGroups, catalogGroup, git, meta] = await Promise.all([
+  const [workspaceGroups, catalogGroup, discoverSkills, git, meta] = await Promise.all([
     Promise.all(config.libraries.map((library) => scanLibrarySkills(library))),
     scanCatalogSkills(config),
+    scanDiscoverSkills(),
     getGitStatus(config.catalog.remoteRepoUrl),
     loadSkillMetaState(),
   ]);
@@ -834,11 +961,14 @@ export async function getDashboardData(): Promise<DashboardData> {
   config.libraries.forEach((library, index) => {
     workspaceByLibrary.set(
       library.id,
-      new Map(workspaceGroups[index].map((skill) => [skill.id, skill])),
+      new Map(
+        workspaceGroups[index]
+          .filter((skill) => skill.libraryState === "enabled")
+          .map((skill) => [skill.id, skill]),
+      ),
     );
   });
 
-  const nextWorkspaceSkills = buildWorkspaceSkills(workspaceSkills, catalogGroup);
   const nextCatalogSkills = buildCatalogSkills(
     catalogGroup,
     config.libraries,
@@ -846,7 +976,7 @@ export async function getDashboardData(): Promise<DashboardData> {
   );
   const librarySummaries = buildLibrarySummaries(
     config.libraries,
-    nextWorkspaceSkills,
+    workspaceSkills,
     nextCatalogSkills,
   );
 
@@ -858,21 +988,14 @@ export async function getDashboardData(): Promise<DashboardData> {
     librarySummaries,
     summary: {
       libraries: config.libraries.length,
+      discoverSkills: discoverSkills.length,
       workspaceSkills: workspaceSkills.length,
       catalogSkills: catalogGroup.length,
-      pendingImports: nextWorkspaceSkills.filter(
-        (skill) => skill.catalogStatus !== "synced",
-      ).length,
-      pendingInstalls: nextCatalogSkills.reduce(
-        (count, skill) =>
-          count +
-          skill.installations.filter(
-            (installation) => installation.status !== "installed",
-          ).length,
-        0,
-      ),
+      pendingImports: 0,
+      pendingInstalls: 0,
     },
-    workspaceSkills: nextWorkspaceSkills,
+    discoverSkills,
+    workspaceSkills,
     catalogSkills: nextCatalogSkills,
   };
 }
@@ -891,6 +1014,7 @@ export async function updateSkillMetadata(
   skillIds.forEach((skillId) => {
     const current = nextRecords[skillId] ?? {
       tags: [],
+      generatedTags: [],
       preferredSources: [],
       updatedAt,
     };
@@ -913,6 +1037,10 @@ export async function updateSkillMetadata(
             ? changes.note.trim()
             : undefined,
       tags: nextTags,
+      generatedTags:
+        changes.generatedTags === undefined
+          ? current.generatedTags
+          : changes.generatedTags,
       trashed: changes.trashed === undefined ? current.trashed : changes.trashed,
       preferredSources: nextPreferredSources,
       updatedAt,
@@ -966,12 +1094,39 @@ function findLibrary(config: SkillHubConfig, libraryId: string) {
   return library;
 }
 
+function findDiscoverSource(sourceId: string) {
+  const source = DISCOVER_SOURCES.find((entry) => entry.id === sourceId);
+
+  if (!source) {
+    throw new Error(`Unknown discover source: ${sourceId}`);
+  }
+
+  return source;
+}
+
 async function findSkillRecord(
   skillId: string,
   sourceId: string,
-  locationType: "library" | "catalog",
+  locationType: "library" | "catalog" | "discover",
 ) {
   const config = await loadSkillHubConfig();
+
+  if (locationType === "discover") {
+    const discoverSkills = await scanDiscoverSkills();
+    const record = discoverSkills.find(
+      (skill) => skill.id === skillId && skill.discoverSourceId === sourceId,
+    );
+
+    if (!record) {
+      throw new Error(`Discover skill ${skillId} was not found.`);
+    }
+
+    return {
+      config,
+      record,
+      manifest: undefined,
+    };
+  }
 
   if (locationType === "catalog") {
     const catalogSkills = await scanCatalogSkills(config);
@@ -1006,7 +1161,7 @@ async function findSkillRecord(
 export async function getSkillDetail(
   skillId: string,
   sourceId: string,
-  locationType: "library" | "catalog",
+  locationType: "library" | "catalog" | "discover",
 ): Promise<SkillDetail> {
   const { record, manifest } = await findSkillRecord(skillId, sourceId, locationType);
   const [skillMarkdown, readmeMarkdown, packageJson, files] = await Promise.all([
@@ -1094,6 +1249,37 @@ export async function installCatalogSkill(skillId: string, libraryId: string) {
   return getDashboardData();
 }
 
+export async function installDiscoverSkill(
+  skillId: string,
+  discoverSourceId: string,
+  libraryId: string,
+) {
+  const config = await loadSkillHubConfig();
+  const library = findLibrary(config, libraryId);
+  const discoverSource = findDiscoverSource(discoverSourceId);
+  const discoverSkills = await scanDiscoverSkills();
+  const sourceSkill = discoverSkills.find(
+    (skill) => skill.id === skillId && skill.discoverSourceId === discoverSource.id,
+  );
+
+  if (!sourceSkill) {
+    throw new Error(`Discover skill ${skillId} was not found in ${discoverSource.label}.`);
+  }
+
+  if (!sourceSkill.compatibility.includes(libraryId)) {
+    throw new Error(`${skillId} does not currently support ${libraryId}.`);
+  }
+
+  const targetPath = path.join(library.path, skillId);
+  const disabledPath = path.join(getDisabledLibraryPath(library), skillId);
+
+  await fs.mkdir(library.path, { recursive: true });
+  await fs.rm(disabledPath, { recursive: true, force: true });
+  await copyDirectory(sourceSkill.path, targetPath, new Set([".skillhub.json"]));
+
+  return getDashboardData();
+}
+
 export async function syncSkillBetweenLibraries(
   skillId: string,
   sourceLibraryId: string,
@@ -1121,6 +1307,278 @@ export async function syncSkillBetweenLibraries(
   return getDashboardData();
 }
 
+export async function setLibrarySkillEnabled(
+  skillId: string,
+  libraryId: string,
+  enabled: boolean,
+) {
+  const config = await loadSkillHubConfig();
+  const library = findLibrary(config, libraryId);
+  const activePath = path.join(library.path, skillId);
+  const disabledRoot = getDisabledLibraryPath(library);
+  const disabledPath = path.join(disabledRoot, skillId);
+
+  if (enabled) {
+    if (!(await pathExists(disabledPath))) {
+      throw new Error(`Disabled skill ${skillId} was not found in ${library.label}.`);
+    }
+
+    await fs.mkdir(library.path, { recursive: true });
+    await fs.rm(activePath, { recursive: true, force: true });
+    await fs.rename(disabledPath, activePath);
+  } else {
+    if (!(await pathExists(activePath))) {
+      throw new Error(`Enabled skill ${skillId} was not found in ${library.label}.`);
+    }
+
+    await fs.mkdir(disabledRoot, { recursive: true });
+    await fs.rm(disabledPath, { recursive: true, force: true });
+    await fs.rename(activePath, disabledPath);
+  }
+
+  return getDashboardData();
+}
+
+function inferSmartTags(record: SkillRecord) {
+  return inferSmartTagsFromText(
+    [
+      record.id,
+      record.name,
+      record.description,
+      ...record.commands,
+      ...record.triggers,
+      record.relativePath,
+    ].join(" "),
+  );
+}
+
+function inferSmartTagsFromText(input: string) {
+  const text = input.toLowerCase();
+  const rules = [
+    {
+      tag: "写作",
+      keywords: [
+        "write",
+        "writing",
+        "article",
+        "markdown",
+        "wechat",
+        "copy",
+        "draft",
+        "公众号",
+        "写稿",
+        "文案",
+      ],
+    },
+    {
+      tag: "研究",
+      keywords: [
+        "research",
+        "analysis",
+        "analy",
+        "report",
+        "insight",
+        "trend",
+        "score",
+        "调研",
+        "研究",
+        "洞察",
+      ],
+    },
+    {
+      tag: "网页",
+      keywords: [
+        "browser",
+        "web",
+        "search",
+        "crawl",
+        "url",
+        "page",
+        "scrape",
+        "网页",
+        "浏览器",
+        "联网",
+      ],
+    },
+    {
+      tag: "配图",
+      keywords: [
+        "image",
+        "illustrat",
+        "cover",
+        "comic",
+        "thumbnail",
+        "slide",
+        "ppt",
+        "配图",
+        "封面",
+        "插图",
+      ],
+    },
+    {
+      tag: "产品",
+      keywords: [
+        "prd",
+        "persona",
+        "journey",
+        "opportunity",
+        "value proposition",
+        "jtbd",
+        "用户",
+        "产品",
+        "需求",
+      ],
+    },
+    {
+      tag: "开发",
+      keywords: [
+        "code",
+        "plugin",
+        "debug",
+        "review",
+        "developer",
+        "api",
+        "skill",
+        "agent",
+        "开发",
+        "工程",
+      ],
+    },
+    {
+      tag: "自动化",
+      keywords: [
+        "automation",
+        "workflow",
+        "install",
+        "setup",
+        "publish",
+        "release",
+        "pipeline",
+        "自动",
+        "工作流",
+        "批量",
+      ],
+    },
+    {
+      tag: "社媒",
+      keywords: [
+        "tweet",
+        "twitter",
+        "xiaohongshu",
+        "wechat",
+        "douyin",
+        "weibo",
+        "bilibili",
+        "小红书",
+        "微博",
+        "播客",
+      ],
+    },
+  ];
+
+  const scores = rules
+    .map((rule) => ({
+      tag: rule.tag,
+      score: rule.keywords.reduce(
+        (count, keyword) => count + (text.includes(keyword) ? 1 : 0),
+        0,
+      ),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  const tags = scores.map((entry) => entry.tag);
+
+  if (tags.length === 0 && /prompt|instruction|system/.test(text)) {
+    tags.push("提示词");
+  }
+
+  if (tags.length === 0 && /template|framework|workflow|process/.test(text)) {
+    tags.push("工作流");
+  }
+
+  if (tags.length === 0) {
+    tags.push("工具");
+  }
+
+  return unique(tags).slice(0, 4);
+}
+
+async function buildSmartTagText(record: SkillRecord) {
+  const [skillMarkdown, readmeMarkdown] = await Promise.all([
+    readTextIfExists(record.skillFile),
+    readTextIfExists(record.readmeFile),
+  ]);
+
+  return [
+    record.id,
+    record.name,
+    record.description,
+    record.shortDescription,
+    ...record.commands,
+    ...record.triggers,
+    stripMarkdown(skillMarkdown ?? ""),
+    stripMarkdown(readmeMarkdown ?? ""),
+  ].join(" ");
+}
+
+export async function generateSmartTags(skillIds: string[]) {
+  const [discoverSkills, workspaceGroups] = await Promise.all([
+    scanDiscoverSkills(),
+    Promise.all((await loadSkillHubConfig()).libraries.map((library) => scanLibrarySkills(library))),
+  ]);
+  const workspaceSkills = workspaceGroups.flat();
+  const recordsById = new Map<string, SkillRecord[]>();
+
+  [...discoverSkills, ...workspaceSkills].forEach((record) => {
+    recordsById.set(record.id, [...(recordsById.get(record.id) ?? []), record]);
+  });
+
+  const meta = await loadSkillMetaState();
+  const nextRecords = { ...meta.records };
+  const updatedAt = new Date().toISOString();
+
+  skillIds.forEach((skillId) => {
+    recordsById.set(skillId, recordsById.get(skillId) ?? []);
+  });
+
+  await Promise.all(
+    skillIds.map(async (skillId) => {
+      const records = recordsById.get(skillId) ?? [];
+      const texts = await Promise.all(
+        records.map(async (record) => buildSmartTagText(record)),
+      );
+      const generatedTags = unique(
+        texts.flatMap((text, index) => {
+          const record = records[index];
+
+          if (!record) {
+            return [];
+          }
+
+          return inferSmartTagsFromText(text.length > 0 ? text : inferSmartTags(record).join(" "));
+        }),
+      );
+      const current = nextRecords[skillId] ?? {
+        tags: [],
+        generatedTags: [],
+        preferredSources: [],
+        updatedAt,
+      };
+
+      nextRecords[skillId] = {
+        ...current,
+        generatedTags,
+        updatedAt,
+      };
+    }),
+  );
+
+  await writeSkillMetaState(nextRecords);
+
+  return getDashboardData();
+}
+
 export async function removeCatalogSkill(skillId: string) {
   const config = await loadSkillHubConfig();
   const targetPath = path.join(resolveFromRepo(config.catalog.directory), skillId);
@@ -1137,8 +1595,15 @@ export async function removeLibrarySkill(skillId: string, libraryId: string) {
   const config = await loadSkillHubConfig();
   const library = findLibrary(config, libraryId);
   const targetPath = path.join(library.path, skillId);
+  const disabledPath = path.join(getDisabledLibraryPath(library), skillId);
 
-  await removeDirectory(library.path, targetPath);
+  if (await pathExists(targetPath)) {
+    await removeDirectory(library.path, targetPath);
+  }
+
+  if (await pathExists(disabledPath)) {
+    await removeDirectory(getDisabledLibraryPath(library), disabledPath);
+  }
 
   return getDashboardData();
 }

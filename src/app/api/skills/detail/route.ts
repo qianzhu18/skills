@@ -12,7 +12,9 @@ export async function GET(request: Request) {
     if (
       !skillId ||
       !sourceId ||
-      (locationType !== "library" && locationType !== "catalog")
+      (locationType !== "library" &&
+        locationType !== "catalog" &&
+        locationType !== "discover")
     ) {
       return NextResponse.json(
         {

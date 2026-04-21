@@ -1,7 +1,7 @@
 {
   "catalog": {
     "title": "Qianzhu Skill Store",
-    "description": "Scan local Claude/Codex/Agents skills, curate them into a portable store, and sync the catalog with GitHub.",
+    "description": "Discover installable skills from curated sources and manage local Claude/Codex libraries without exposing folder details.",
     "remoteRepoUrl": "https://github.com/qianzhu18/skills",
     "defaultBranch": "main",
     "directory": "catalog/skills",
