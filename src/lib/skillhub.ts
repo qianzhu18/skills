@@ -1394,11 +1394,13 @@ export async function getDashboardData(): Promise<DashboardData> {
     workspaceSkills,
     nextCatalogSkills,
   );
+  const nextMeta = await ensureGeneratedTags(meta, [...discoverSkills, ...workspaceSkills]);
+
   return {
     generatedAt: new Date().toISOString(),
     config,
     git,
-    meta,
+    meta: nextMeta,
     librarySummaries,
     summary: {
       libraries: config.libraries.length,
@@ -1983,6 +1985,31 @@ async function buildSmartTagText(record: SkillRecord) {
   ].join(" ");
 }
 
+async function suggestTagsForRecords(
+  records: SkillRecord[],
+  manualTagCatalog: string[],
+) {
+  const texts = await Promise.all(records.map((record) => buildSmartTagText(record)));
+
+  return unique(
+    texts.flatMap((text, index) => {
+      const record = records[index];
+
+      if (!record) {
+        return [];
+      }
+
+      const analysisText = text.length > 0 ? text : inferSmartTags(record).join(" ");
+
+      if (manualTagCatalog.length > 0) {
+        return matchExistingTagsToText(analysisText, manualTagCatalog);
+      }
+
+      return inferSmartTagsFromText(analysisText);
+    }),
+  );
+}
+
 function splitTagTokens(tag: string) {
   return tag
     .toLowerCase()
@@ -2091,6 +2118,50 @@ function matchExistingTagsToText(text: string, tagCatalog: string[]) {
     .slice(0, 6);
 }
 
+async function ensureGeneratedTags(meta: SkillMetaState, records: SkillRecord[]) {
+  const nextRecords = { ...meta.records };
+  const missingSkillIds = unique(
+    records
+      .map((record) => record.id)
+      .filter((skillId) => (nextRecords[skillId]?.generatedTags?.length ?? 0) === 0),
+  );
+
+  if (missingSkillIds.length === 0) {
+    return meta;
+  }
+
+  const recordsById = new Map<string, SkillRecord[]>();
+
+  records.forEach((record) => {
+    recordsById.set(record.id, [...(recordsById.get(record.id) ?? []), record]);
+  });
+
+  const updatedAt = new Date().toISOString();
+
+  await Promise.all(
+    missingSkillIds.map(async (skillId) => {
+      const skillRecords = recordsById.get(skillId) ?? [];
+      const generatedTags = await suggestTagsForRecords(skillRecords, meta.tagCatalog);
+      const current = nextRecords[skillId] ?? {
+        tags: [],
+        generatedTags: [],
+        preferredSources: [],
+        updatedAt,
+      };
+
+      nextRecords[skillId] = {
+        ...current,
+        generatedTags,
+        updatedAt,
+      };
+    }),
+  );
+
+  await writeSkillMetaState(nextRecords);
+
+  return loadSkillMetaState();
+}
+
 export async function generateSmartTags(skillIds: string[]) {
   const [discoverSkills, workspaceGroups] = await Promise.all([
     scanDiscoverSkills(),
@@ -2115,27 +2186,7 @@ export async function generateSmartTags(skillIds: string[]) {
   await Promise.all(
     skillIds.map(async (skillId) => {
       const records = recordsById.get(skillId) ?? [];
-      const texts = await Promise.all(
-        records.map(async (record) => buildSmartTagText(record)),
-      );
-      const generatedTags = unique(
-        texts.flatMap((text, index) => {
-          const record = records[index];
-
-          if (!record) {
-            return [];
-          }
-
-          const analysisText =
-            text.length > 0 ? text : inferSmartTags(record).join(" ");
-
-          if (manualTagCatalog.length > 0) {
-            return matchExistingTagsToText(analysisText, manualTagCatalog);
-          }
-
-          return inferSmartTagsFromText(analysisText);
-        }),
-      );
+      const generatedTags = await suggestTagsForRecords(records, manualTagCatalog);
       const current = nextRecords[skillId] ?? {
         tags: [],
         generatedTags: [],

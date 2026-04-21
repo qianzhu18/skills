@@ -46,6 +46,9 @@ type LibraryItem = {
   description: string;
   installedIn: InstalledLibraryId[];
   tags: string[];
+  allTags: string[];
+  manualTags: string[];
+  suggestedTags: string[];
   trust: WorkspaceSkill["trust"];
   records: Partial<Record<InstalledLibraryId, WorkspaceSkill>>;
   primaryRecord: WorkspaceSkill;
@@ -112,7 +115,7 @@ function scoreQuery(query: string, fields: string[]) {
   }, 0);
 }
 
-function getMetaTags(data: DashboardData, skillId: string) {
+function getManualTags(data: DashboardData, skillId: string) {
   return data.meta.records[skillId]?.tags ?? [];
 }
 
@@ -122,6 +125,20 @@ function getSuggestedTags(data: DashboardData, skillId: string) {
   return unique(
     (record?.generatedTags ?? []).filter((tag) => !(record?.tags ?? []).includes(tag)),
   );
+}
+
+function getVisibleTags(data: DashboardData, skillId: string) {
+  const manualTags = getManualTags(data, skillId);
+
+  if (manualTags.length > 0) {
+    return manualTags;
+  }
+
+  return getSuggestedTags(data, skillId);
+}
+
+function getAllTags(data: DashboardData, skillId: string) {
+  return unique([...getManualTags(data, skillId), ...getSuggestedTags(data, skillId)]);
 }
 
 function pickHighestRiskTrust(trusts: WorkspaceSkill["trust"][]) {
@@ -159,7 +176,10 @@ function buildLibraryItems(data: DashboardData): LibraryItem[] {
         name: primary.name,
         description: primary.description,
         installedIn: unique(records.map((record) => record.sourceId)) as InstalledLibraryId[],
-        tags: getMetaTags(data, skillId),
+        tags: getVisibleTags(data, skillId),
+        allTags: getAllTags(data, skillId),
+        manualTags: getManualTags(data, skillId),
+        suggestedTags: getSuggestedTags(data, skillId),
         trust: pickHighestRiskTrust(records.map((record) => record.trust)),
         records: Object.fromEntries(
           records.map((record) => [record.sourceId, record]),
@@ -373,6 +393,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [data, setData] = useState(initialData);
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("all");
   const [search, setSearch] = useState("");
+  const [externalSearchEnabled, setExternalSearchEnabled] = useState(false);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -422,7 +443,16 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     () => librarySummaries.reduce((total, summary) => total + summary.enabledCount, 0),
     [librarySummaries],
   );
-  const availableTags = useMemo(() => data.meta.tagCatalog, [data.meta.tagCatalog]);
+  const availableTags = useMemo(
+    () =>
+      unique(
+        Object.values(data.meta.records).flatMap((record) => [
+          ...record.tags,
+          ...(record.generatedTags ?? []),
+        ]),
+      ),
+    [data.meta.records],
+  );
   const installedSkillIdsByLibrary = useMemo(
     () => ({
       claude: new Set(
@@ -446,7 +476,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           return false;
         }
 
-        if (selectedTag && !item.tags.includes(selectedTag)) {
+        if (selectedTag && !item.allTags.includes(selectedTag)) {
           return false;
         }
 
@@ -461,7 +491,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           ...item.installedIn
             .map((entry) => item.records[entry]?.relativePath)
             .filter((value): value is string => Boolean(value)),
-          ...item.tags,
+          ...item.allTags,
         ]
           .join(" ")
           .toLowerCase()
@@ -475,7 +505,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         const leftScore = scoreQuery(deferredSearch, [
           left.name,
           `/${left.name}`,
-          ...left.tags,
+          ...left.allTags,
           left.description,
           ...left.installedIn.map((entry) => getLibraryLabel(entry)),
           ...left.installedIn
@@ -485,7 +515,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         const rightScore = scoreQuery(deferredSearch, [
           right.name,
           `/${right.name}`,
-          ...right.tags,
+          ...right.allTags,
           right.description,
           ...right.installedIn.map((entry) => getLibraryLabel(entry)),
           ...right.installedIn
@@ -533,6 +563,8 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     LIBRARY_PAGE_SIZE,
   );
   const currentScopeIds = unique(filteredLibrary.map((item) => item.id));
+  const currentScopeLabel =
+    libraryTab === "all" ? "当前管理视图" : `${getLibraryLabel(libraryTab)} 当前视图`;
 
   async function applyDashboard(nextData: DashboardData) {
     startTransition(() => {
@@ -641,7 +673,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   }, [deferredSearch, libraryTab, riskFilter, selectedTag]);
 
   useEffect(() => {
-    if (deferredSearch.length < 2) {
+    if (!externalSearchEnabled || deferredSearch.length < 2) {
       setRemoteDiscoverResults([]);
       setRemoteDiscoverLoading(false);
       setRemoteDiscoverError(null);
@@ -689,7 +721,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [deferredSearch]);
+  }, [deferredSearch, externalSearchEnabled]);
 
   const drawerSources = useMemo(() => {
     if (!drawerTarget) {
@@ -739,7 +771,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const activeDrawerLibraryItem = drawerTarget
     ? allLibraryItems.find((item) => item.id === drawerTarget.skillId) ?? null
     : null;
-  const activeManualTags = activeDetail ? getMetaTags(data, activeDetail.skill.id) : [];
+  const activeManualTags = activeDetail ? getManualTags(data, activeDetail.skill.id) : [];
   const activeSuggestedTags = activeDetail ? getSuggestedTags(data, activeDetail.skill.id) : [];
 
   useEffect(() => {
@@ -882,15 +914,73 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     if (skillIds.length === 0) {
       return;
     }
+    const previousRecords = data.meta.records;
+    const nameById = new Map(allLibraryItems.map((item) => [item.id, item.name]));
 
-    await runAction(
-      "/api/actions/ai-tags",
-      {
-        skillIds,
-      },
-      `ai-tags:${skillIds.join(",")}`,
-      "AI 推荐标签已更新。",
-    );
+    setBusyKey(`ai-tags:${skillIds.join(",")}`);
+    setNotice(null);
+
+    try {
+      const response = await fetch("/api/actions/ai-tags", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ skillIds }),
+      });
+      const payload = await parseResponse(response);
+
+      if (!response.ok || !payload.ok || !payload.dashboard) {
+        throw new Error(payload.message ?? "AI 标签匹配失败。");
+      }
+
+      const nextDashboard = payload.dashboard as DashboardData;
+      const changed = skillIds
+        .map((skillId) => {
+          const previous = previousRecords[skillId]?.generatedTags ?? [];
+          const next = nextDashboard.meta.records[skillId]?.generatedTags ?? [];
+          const added = next.filter((tag) => !previous.includes(tag));
+
+          return {
+            skillId,
+            added,
+          };
+        })
+        .filter((entry) => entry.added.length > 0);
+
+      await applyDashboard(nextDashboard);
+
+      if (changed.length === 0) {
+        setNotice({
+          kind: "success",
+          text: `已检查 ${skillIds.length} 个 skills，现有推荐标签保持不变。`,
+        });
+        return;
+      }
+
+      const summary = changed
+        .slice(0, 3)
+        .map(
+          (entry) =>
+            `${nameById.get(entry.skillId) ?? entry.skillId}: ${entry.added.join(" / ")}`,
+        )
+        .join("；");
+
+      setNotice({
+        kind: "success",
+        text:
+          changed.length > 3
+            ? `已为 ${changed.length} 个 skills 更新推荐标签，例如 ${summary}。`
+            : `已更新推荐标签：${summary}。`,
+      });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "AI 标签匹配失败。",
+      });
+    } finally {
+      setBusyKey(null);
+    }
   }
 
   async function saveManualTags(skillIds: string[], tags: string[], successText: string) {
@@ -914,7 +1004,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
       return;
     }
 
-    const currentTags = getMetaTags(data, skillId);
+    const currentTags = getManualTags(data, skillId);
 
     if (currentTags.includes(nextTag)) {
       setTagDraft("");
@@ -926,14 +1016,14 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   }
 
   async function removeManualTag(skillId: string, tag: string) {
-    const currentTags = getMetaTags(data, skillId);
+    const currentTags = getManualTags(data, skillId);
     const nextTags = currentTags.filter((entry) => entry !== tag);
 
     await saveManualTags([skillId], nextTags, `已移除标签 ${tag}。`);
   }
 
   async function acceptSuggestedTag(skillId: string, tag: string) {
-    const currentTags = getMetaTags(data, skillId);
+    const currentTags = getManualTags(data, skillId);
 
     if (currentTags.includes(tag)) {
       return;
@@ -1030,12 +1120,20 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索本地 skills，或去 skills.sh 找新技能…"
+              placeholder="搜索已安装 skills、路径、描述或标签…"
             />
           </label>
           <button
             type="button"
+            className={`mvp-secondary-button ${externalSearchEnabled ? "active" : ""}`}
+            onClick={() => setExternalSearchEnabled((current) => !current)}
+          >
+            {externalSearchEnabled ? "关闭外部搜索" : "搜索外部 skills"}
+          </button>
+          <button
+            type="button"
             className="mvp-primary-button"
+            title={`当前会处理 ${currentScopeLabel} 中的 ${currentScopeIds.length} 个 skills`}
             disabled={
               (busyKey?.startsWith("ai-tags") ?? false) || currentScopeIds.length === 0
             }
@@ -1046,7 +1144,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             ) : (
               <Sparkles size={16} />
             )}
-            AI 匹配标签
+            AI 匹配当前筛选 ({currentScopeIds.length})
           </button>
           <div className="mvp-avatar">
             <UserCircle2 size={22} />
@@ -1129,7 +1227,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             </div>
             <div className="mvp-tag-cloud">
               {availableTags.length === 0 ? (
-                <p>先在 skill 详情里创建你的分类标签，再让 AI 去帮你匹配。</p>
+                <p>AI 会先打一版初始标签，你也可以继续手动修正。</p>
               ) : (
                 availableTags.map((tag) => (
                   <button
@@ -1146,7 +1244,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               )}
             </div>
             <p className="mvp-sidebar-note">
-              这里展示的是你的手动标签体系。AI 只会给推荐，不会自动改正式标签。
+              左侧先支持按 AI 初版标签筛选，后面你可以在详情里把它们修成自己的分类体系。
             </p>
           </section>
         </aside>
@@ -1159,10 +1257,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           <section className="mvp-hero compact">
             <div>
               <span>MY SKILLS</span>
-              <h1>一个面板管好自己的 skills，需要时再顺手搜索外部 skill</h1>
+              <h1>我的 Skills 管理</h1>
               <p>
-                主表格始终只展示你本机已经安装的 skills，并且按技能实体聚合，不再把 Claude 和 Codex 拆成两套重复列表。
-                搜索框会同时帮你筛本地管理表，并补充上方的外部 skill 搜索结果。
+                管理表只看本机已安装 skills。外部搜索只有你主动打开时才出现，而且放在表格下方，不会打断本地管理。
               </p>
             </div>
             <div className="mvp-hero-metrics">
@@ -1172,7 +1269,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               </article>
               <article>
                 <strong>{filteredLibrary.length}</strong>
-                <span>当前结果</span>
+                <span>本地结果</span>
               </article>
               <article>
                 <strong>{libraryScriptedCount}</strong>
@@ -1185,19 +1282,199 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             </div>
           </section>
 
-          {deferredSearch.length >= 2 ? (
+          <div className="mvp-library-tabs">
+            <button
+              type="button"
+              className={libraryTab === "all" ? "active" : ""}
+              onClick={() => setLibraryTab("all")}
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              className={libraryTab === "claude" ? "active" : ""}
+              onClick={() => setLibraryTab("claude")}
+            >
+              Claude Code
+            </button>
+            <button
+              type="button"
+              className={libraryTab === "codex" ? "active" : ""}
+              onClick={() => setLibraryTab("codex")}
+            >
+              Codex
+            </button>
+          </div>
+
+          {selectedIds.length > 0 ? (
+            <div className="mvp-batch-bar">
+              <span>已选中 {selectedIds.length} 个 skills</span>
+              <div className="mvp-inline-actions">
+                <button type="button" onClick={() => void batchLibraryAction("uninstall")}>
+                  批量删除
+                </button>
+                <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
+                  AI 匹配选中项
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <section ref={librarySectionRef} className="mvp-section">
+            <div className="mvp-section-head">
+              <div>
+                <span>LIBRARY</span>
+                <h2>{libraryTab === "all" ? "我的全部 Skills" : `${getLibraryLabel(libraryTab)} 已安装`}</h2>
+                <p className="mvp-section-copy">
+                  {filteredLibrary.length} 个结果，每页 {LIBRARY_PAGE_SIZE} 个。表格是你的主管理区，
+                  搜索时上方只额外补充外部 skill，不会再和本地数量混在一起。
+                </p>
+              </div>
+              <Pagination
+                page={Math.min(libraryPage, libraryTotalPages)}
+                totalPages={libraryTotalPages}
+                onChange={changeLibraryPage}
+              />
+            </div>
+
+            {filteredLibrary.length === 0 ? (
+              <EmptyState
+                title="当前筛选下没有匹配的已安装 skills"
+                copy="换个关键词、标签或风险筛选试试；如果要找新 skill，直接用上面的搜索结果安装。"
+              />
+            ) : (
+              <div className="mvp-table-wrap">
+                <table className="mvp-table">
+                  <thead>
+                    <tr>
+                      <th />
+                      <th>Skill</th>
+                      <th>用途</th>
+                      <th>标签</th>
+                      <th>Trust</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedLibrary.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            onChange={() =>
+                              setSelectedIds((current) =>
+                                current.includes(item.id)
+                                  ? current.filter((entry) => entry !== item.id)
+                                  : [...current, item.id],
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <div className="mvp-table-primary">
+                            <strong>/{item.name}</strong>
+                            <div className="mvp-inline-badges">
+                              <span>已管理 {item.installedIn.length} 个安装位置</span>
+                              {item.installedIn.includes("claude") ? (
+                                <Badge tone="claude">Claude Code</Badge>
+                              ) : null}
+                              {item.installedIn.includes("codex") ? (
+                                <Badge tone="codex">Codex</Badge>
+                              ) : null}
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <p className="mvp-table-description mvp-line-clamp-2">
+                            {item.description}
+                          </p>
+                        </td>
+                        <td>
+                          <div className="mvp-inline-tags">
+                            {item.tags.length > 0 ? (
+                              item.tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className={
+                                    item.manualTags.includes(tag) ? "" : "mvp-suggested-tag"
+                                  }
+                                >
+                                  {item.manualTags.includes(tag) ? tag : `AI · ${tag}`}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="muted">暂无</span>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="mvp-inline-badges">
+                            <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
+                            {item.trust.hasScripts ? (
+                              <Badge tone="danger">含脚本</Badge>
+                            ) : (
+                              <Badge tone="good">无脚本</Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="mvp-inline-actions">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDrawerTarget({
+                                  kind: "library",
+                                  skillId: item.id,
+                                })
+                              }
+                            >
+                              查看
+                            </button>
+                            <button type="button" onClick={() => void generateTags([item.id])}>
+                              AI 匹配
+                            </button>
+                            <button
+                              type="button"
+                              className="danger"
+                              onClick={() => void uninstallLibraryItem(item)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <Pagination
+              page={Math.min(libraryPage, libraryTotalPages)}
+              totalPages={libraryTotalPages}
+              onChange={changeLibraryPage}
+            />
+          </section>
+
+          {externalSearchEnabled ? (
             <section className="mvp-section">
               <div className="mvp-section-head">
                 <div>
                   <span>EXTERNAL SEARCH</span>
                   <h2>外部技能搜索</h2>
                   <p className="mvp-section-copy">
-                    这里是 `skills.sh` 的补充搜索结果，只负责帮你找新 skill；下面的表格始终是你的本地已安装 skills。
+                    这里单独展示 `skills.sh` 结果，不和本地管理表混算。当前外部结果 {filteredRemoteResults.length} 条。
                   </p>
                 </div>
               </div>
 
-              {remoteDiscoverLoading ? (
+              {deferredSearch.length < 2 ? (
+                <EmptyState
+                  title="输入至少 2 个字符再搜索外部 skills"
+                  copy="本地表格一直可以直接搜；外部搜索只在你主动开启后作为附加区块出现。"
+                />
+              ) : remoteDiscoverLoading ? (
                 <div className="mvp-loading">
                   <LoaderCircle size={22} className="spin" />
                   正在从 skills.sh 搜索…
@@ -1289,175 +1566,6 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               )}
             </section>
           ) : null}
-
-          <div className="mvp-library-tabs">
-            <button
-              type="button"
-              className={libraryTab === "all" ? "active" : ""}
-              onClick={() => setLibraryTab("all")}
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              className={libraryTab === "claude" ? "active" : ""}
-              onClick={() => setLibraryTab("claude")}
-            >
-              Claude Code
-            </button>
-            <button
-              type="button"
-              className={libraryTab === "codex" ? "active" : ""}
-              onClick={() => setLibraryTab("codex")}
-            >
-              Codex
-            </button>
-          </div>
-
-          {selectedIds.length > 0 ? (
-            <div className="mvp-batch-bar">
-              <span>已选中 {selectedIds.length} 个 skills</span>
-              <div className="mvp-inline-actions">
-                <button type="button" onClick={() => void batchLibraryAction("uninstall")}>
-                  批量删除
-                </button>
-                <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
-                  AI 匹配
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <section ref={librarySectionRef} className="mvp-section">
-            <div className="mvp-section-head">
-              <div>
-                <span>LIBRARY</span>
-                <h2>{libraryTab === "all" ? "我的全部 Skills" : `${getLibraryLabel(libraryTab)} 已安装`}</h2>
-                <p className="mvp-section-copy">
-                  {filteredLibrary.length} 个结果，每页 {LIBRARY_PAGE_SIZE} 个。表格是你的主管理区，
-                  搜索时上方只额外补充外部 skill，不会再和本地数量混在一起。
-                </p>
-              </div>
-              <Pagination
-                page={Math.min(libraryPage, libraryTotalPages)}
-                totalPages={libraryTotalPages}
-                onChange={changeLibraryPage}
-              />
-            </div>
-
-            {filteredLibrary.length === 0 ? (
-              <EmptyState
-                title="当前筛选下没有匹配的已安装 skills"
-                copy="换个关键词、标签或风险筛选试试；如果要找新 skill，直接用上面的搜索结果安装。"
-              />
-            ) : (
-              <div className="mvp-table-wrap">
-                <table className="mvp-table">
-                  <thead>
-                    <tr>
-                      <th />
-                      <th>Skill</th>
-                      <th>用途</th>
-                      <th>已安装到</th>
-                      <th>标签</th>
-                      <th>Trust</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedLibrary.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.includes(item.id)}
-                            onChange={() =>
-                              setSelectedIds((current) =>
-                                current.includes(item.id)
-                                  ? current.filter((entry) => entry !== item.id)
-                                  : [...current, item.id],
-                              )
-                            }
-                          />
-                        </td>
-                        <td>
-                          <div className="mvp-table-primary">
-                            <strong>/{item.name}</strong>
-                            <span>已管理 {item.installedIn.length} 个安装位置</span>
-                          </div>
-                        </td>
-                        <td>
-                          <p className="mvp-table-description mvp-line-clamp-2">
-                            {item.description}
-                          </p>
-                        </td>
-                        <td>
-                          <div className="mvp-inline-badges">
-                            {item.installedIn.includes("claude") ? (
-                              <Badge tone="claude">Claude Code</Badge>
-                            ) : null}
-                            {item.installedIn.includes("codex") ? (
-                              <Badge tone="codex">Codex</Badge>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="mvp-inline-tags">
-                            {item.tags.length > 0 ? (
-                              item.tags.map((tag) => <span key={tag}>{tag}</span>)
-                            ) : (
-                              <span className="muted">暂无</span>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="mvp-inline-badges">
-                            <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
-                            {item.trust.hasScripts ? (
-                              <Badge tone="danger">含脚本</Badge>
-                            ) : (
-                              <Badge tone="good">无脚本</Badge>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="mvp-inline-actions">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDrawerTarget({
-                                  kind: "library",
-                                  skillId: item.id,
-                                })
-                              }
-                            >
-                              查看
-                            </button>
-                            <button type="button" onClick={() => void generateTags([item.id])}>
-                              AI 推荐
-                            </button>
-                            <button
-                              type="button"
-                              className="danger"
-                              onClick={() => void uninstallLibraryItem(item)}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <Pagination
-              page={Math.min(libraryPage, libraryTotalPages)}
-              totalPages={libraryTotalPages}
-              onChange={changeLibraryPage}
-            />
-          </section>
         </section>
       </div>
 
@@ -1494,6 +1602,79 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
 
             {activeDetail ? (
               <>
+                <div className="mvp-tag-editor">
+                  <div className="mvp-tag-editor-head">
+                    <div>
+                      <strong>标签整理</strong>
+                      <p>AI 会先给第一版标签，你可以立刻手动修正成自己的分类体系。</p>
+                    </div>
+                  </div>
+
+                  <div className="mvp-card-tags drawer">
+                    {activeManualTags.length > 0 ? (
+                      activeManualTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="mvp-tag-chip-button"
+                          onClick={() => void removeManualTag(activeDetail.skill.id, tag)}
+                        >
+                          {tag}
+                          <X size={12} />
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">还没有手动标签</span>
+                    )}
+                  </div>
+
+                  <div className="mvp-tag-entry">
+                    <input
+                      value={tagDraft}
+                      onChange={(event) => setTagDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void submitTagDraft();
+                        }
+                      }}
+                      placeholder="输入一个新标签，例如 baoyu / 公众号 / 配图 / 开发"
+                    />
+                    <button type="button" onClick={() => void submitTagDraft()}>
+                      添加标签
+                    </button>
+                  </div>
+
+                  <div className="mvp-tag-editor-head ai">
+                    <div>
+                      <strong>AI 推荐</strong>
+                      <p>如果你还没整理过，先接受 AI 第一版；后面再逐步改成自己的体系。</p>
+                    </div>
+                    <button type="button" onClick={() => void generateTags([activeDetail.skill.id])}>
+                      <Sparkles size={14} />
+                      AI 匹配标签
+                    </button>
+                  </div>
+
+                  <div className="mvp-card-tags drawer">
+                    {activeSuggestedTags.length > 0 ? (
+                      activeSuggestedTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="mvp-tag-suggestion-button"
+                          onClick={() => void acceptSuggestedTag(activeDetail.skill.id, tag)}
+                        >
+                          {tag}
+                          <span>采纳</span>
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">这条 skill 当前没有新的 AI 推荐标签。</span>
+                    )}
+                  </div>
+                </div>
+
                 <div className="mvp-trust-strip">
                   <Badge tone={riskTone(activeDetail.skill.trust)}>
                     {riskLabel(activeDetail.skill.trust)}
@@ -1574,81 +1755,6 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     ) : null}
                   </div>
                 ) : null}
-
-                <div className="mvp-tag-editor">
-                  <div className="mvp-tag-editor-head">
-                    <div>
-                      <strong>手动标签</strong>
-                      <p>你先定义分类体系，比如 `baoyu`、`公众号`、`配图`、`开发`。</p>
-                    </div>
-                  </div>
-
-                  <div className="mvp-card-tags drawer">
-                    {activeManualTags.length > 0 ? (
-                      activeManualTags.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          className="mvp-tag-chip-button"
-                          onClick={() => void removeManualTag(activeDetail.skill.id, tag)}
-                        >
-                          {tag}
-                          <X size={12} />
-                        </button>
-                      ))
-                    ) : (
-                      <span className="muted">还没有手动标签</span>
-                    )}
-                  </div>
-
-                  <div className="mvp-tag-entry">
-                    <input
-                      value={tagDraft}
-                      onChange={(event) => setTagDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          void submitTagDraft();
-                        }
-                      }}
-                      placeholder="输入一个新标签，例如 baoyu / 公众号 / 配图 / 开发"
-                    />
-                    <button type="button" onClick={() => void submitTagDraft()}>
-                      添加标签
-                    </button>
-                  </div>
-
-                  <div className="mvp-tag-editor-head ai">
-                    <div>
-                      <strong>AI 推荐</strong>
-                      <p>只会根据你现有的标签体系给推荐，不会自动写入正式标签。</p>
-                    </div>
-                    <button type="button" onClick={() => void generateTags([activeDetail.skill.id])}>
-                      <Sparkles size={14} />
-                      AI 匹配标签
-                    </button>
-                  </div>
-
-                  <div className="mvp-card-tags drawer">
-                    {activeSuggestedTags.length > 0 ? (
-                      activeSuggestedTags.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          className="mvp-tag-suggestion-button"
-                          onClick={() => void acceptSuggestedTag(activeDetail.skill.id, tag)}
-                        >
-                          {tag}
-                          <span>采纳</span>
-                        </button>
-                      ))
-                    ) : availableTags.length === 0 ? (
-                      <span className="muted">先创建几个手动标签，再点一次 AI 匹配。</span>
-                    ) : (
-                      <span className="muted">还没有推荐命中的标签，继续手动整理也可以。</span>
-                    )}
-                  </div>
-                </div>
 
                 <div className="mvp-drawer-actions">
                   {activeDrawerLibraryItem

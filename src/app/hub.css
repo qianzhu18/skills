@@ -185,6 +185,22 @@ body {
   font-weight: 700;
 }
 
+.mvp-secondary-button {
+  height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--mvp-line);
+  border-radius: 14px;
+  background: white;
+  color: var(--mvp-copy);
+  font-weight: 700;
+}
+
+.mvp-secondary-button.active {
+  border-color: transparent;
+  background: #0f172a;
+  color: white;
+}
+
 .mvp-primary-button:disabled {
   cursor: not-allowed;
   opacity: 0.56;
@@ -204,7 +220,7 @@ body {
 
 .mvp-body {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
   gap: 18px;
   margin-top: 18px;
 }
@@ -404,8 +420,8 @@ body {
 .mvp-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  padding: 22px;
+  gap: 14px;
+  padding: 16px 18px;
 }
 
 .mvp-hero.compact {
@@ -423,18 +439,18 @@ body {
 }
 
 .mvp-hero h1 {
-  margin-top: 8px;
-  font-size: 34px;
+  margin-top: 6px;
+  font-size: 24px;
 }
 
 .mvp-hero p {
-  margin-top: 10px;
-  line-height: 1.7;
+  margin-top: 6px;
+  line-height: 1.6;
 }
 
 .mvp-hero-metrics article {
-  min-width: 140px;
-  padding: 16px 18px;
+  min-width: 108px;
+  padding: 12px 14px;
   border: 1px solid var(--mvp-line);
   border-radius: 18px;
   background: white;
@@ -442,7 +458,7 @@ body {
 
 .mvp-hero-metrics strong {
   display: block;
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 800;
 }
 
@@ -605,7 +621,7 @@ body {
 
 .mvp-table {
   width: 100%;
-  min-width: 1100px;
+  min-width: 860px;
   border-collapse: collapse;
   background: white;
 }
@@ -638,9 +654,14 @@ body {
 
 .mvp-table-description {
   margin: 0;
-  max-width: 680px;
+  max-width: 420px;
   color: var(--mvp-copy);
   line-height: 1.7;
+}
+
+.mvp-suggested-tag {
+  border-style: dashed;
+  color: var(--mvp-blue);
 }
 
 .mvp-inline-actions,
