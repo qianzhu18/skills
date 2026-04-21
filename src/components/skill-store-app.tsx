@@ -5,14 +5,13 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   AlertTriangle,
-  Download,
-  Eye,
   LoaderCircle,
   Search,
   ShieldCheck,
@@ -40,8 +39,8 @@ type CompatibilityFilter = "all" | LibraryTab;
 type RiskFilter = "all" | "safe" | "scripted" | "high";
 type InstallState = "missing" | "installed";
 
-const DISCOVER_PAGE_SIZE = 12;
-const LIBRARY_PAGE_SIZE = 14;
+const DISCOVER_PAGE_SIZE = 9;
+const LIBRARY_PAGE_SIZE = 10;
 
 type DiscoverItem = {
   id: string;
@@ -241,10 +240,6 @@ function riskTone(trust: DiscoverSkill["trust"]) {
   return "good";
 }
 
-function sourceTone(source: DiscoverSkill) {
-  return source.compatibility.includes("claude") ? "claude" : "codex";
-}
-
 function supportsLibrary(item: DiscoverItem, target: LibraryTab) {
   return item.compatibility.includes(target);
 }
@@ -320,6 +315,18 @@ function EmptyState({
   );
 }
 
+function buildPaginationItems(page: number, totalPages: number) {
+  if (totalPages <= 5) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set<number>([1, totalPages, page - 1, page, page + 1]);
+
+  return Array.from(pages)
+    .filter((entry) => entry >= 1 && entry <= totalPages)
+    .sort((left, right) => left - right);
+}
+
 function Pagination({
   page,
   totalPages,
@@ -333,11 +340,32 @@ function Pagination({
     return null;
   }
 
+  const pages = buildPaginationItems(page, totalPages);
+
   return (
     <div className="mvp-pagination">
       <button type="button" disabled={page <= 1} onClick={() => onChange(page - 1)}>
         上一页
       </button>
+      <div className="mvp-page-numbers">
+        {pages.map((entry, index) => {
+          const previous = pages[index - 1];
+          const showGap = previous && entry - previous > 1;
+
+          return (
+            <span key={entry} className="mvp-page-group">
+              {showGap ? <em>…</em> : null}
+              <button
+                type="button"
+                className={entry === page ? "active" : ""}
+                onClick={() => onChange(entry)}
+              >
+                {entry}
+              </button>
+            </span>
+          );
+        })}
+      </div>
       <span>
         第 {page} / {totalPages} 页
       </span>
@@ -372,6 +400,8 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [detailsCache, setDetailsCache] = useState<Record<string, SkillDetail>>({});
   const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const discoverSectionRef = useRef<HTMLElement | null>(null);
+  const librarySectionRef = useRef<HTMLElement | null>(null);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
   const discoverItems = useMemo(() => buildDiscoverItems(data), [data]);
@@ -525,7 +555,6 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
       });
   }, [deferredSearch, libraryItems, selectedTag]);
 
-  const featuredDiscover = filteredDiscover.slice(0, 6);
   const discoverTaggedCount = filteredDiscover.filter((item) => item.tags.length > 0).length;
   const libraryTaggedCount = filteredLibrary.filter((item) => item.tags.length > 0).length;
   const libraryScriptedCount = filteredLibrary.filter((item) => item.trust.hasScripts).length;
@@ -913,6 +942,16 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     }
   }
 
+  function changeDiscoverPage(nextPage: number) {
+    setDiscoverPage(nextPage);
+    discoverSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function changeLibraryPage(nextPage: number) {
+    setLibraryPage(nextPage);
+    librarySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <main className="mvp-shell">
       <header className="mvp-topbar">
@@ -1192,95 +1231,19 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 </div>
               </section>
 
-              <section className="mvp-featured-grid">
-                {featuredDiscover.map((item) => (
-                  <article key={item.id} className="mvp-discover-card featured">
-                    <div className="mvp-card-head">
-                      <div className="mvp-card-copy">
-                        <strong>/{item.name}</strong>
-                        <p className="mvp-line-clamp-2">{item.description}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDrawerTarget({ kind: "discover", skillId: item.id })
-                        }
-                      >
-                        <Eye size={15} />
-                      </button>
-                    </div>
-                    <div className="mvp-card-badges">
-                      {item.discoverSources.map((source) => (
-                        <Badge
-                          key={`${item.id}:${source.discoverSourceId}`}
-                          tone={sourceTone(source)}
-                        >
-                          {source.compatibility.includes("claude")
-                            ? "Claude 来源"
-                            : "Codex 来源"}
-                        </Badge>
-                      ))}
-                      <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
-                      {item.trust.hasScripts ? <Badge tone="danger">含脚本</Badge> : null}
-                    </div>
-                    <div className="mvp-card-tags">
-                      {item.tags.length > 0 ? (
-                        item.tags.map((tag) => <span key={tag}>{tag}</span>)
-                      ) : (
-                        <span className="muted">暂无标签</span>
-                      )}
-                    </div>
-                    <div className="mvp-install-row">
-                      <button
-                        type="button"
-                        className={`tone-${installTone(
-                          item.installState.claude,
-                          supportsLibrary(item, "claude"),
-                        )}`}
-                        disabled={!canInstallTarget(item, "claude")}
-                        onClick={() => void installToLibrary(item, "claude")}
-                      >
-                        <Download size={14} />
-                        {installLabel(
-                          item.installState.claude,
-                          supportsLibrary(item, "claude"),
-                        )}{" "}
-                        Claude
-                      </button>
-                      <button
-                        type="button"
-                        className={`tone-${installTone(
-                          item.installState.codex,
-                          supportsLibrary(item, "codex"),
-                        )}`}
-                        disabled={!canInstallTarget(item, "codex")}
-                        onClick={() => void installToLibrary(item, "codex")}
-                      >
-                        <Download size={14} />
-                        {installLabel(
-                          item.installState.codex,
-                          supportsLibrary(item, "codex"),
-                        )}{" "}
-                        Codex
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </section>
-
-              <section className="mvp-section">
+              <section ref={discoverSectionRef} className="mvp-section">
                 <div className="mvp-section-head">
                   <div>
                     <span>ALL RESULTS</span>
                     <h2>全部技能</h2>
                     <p className="mvp-section-copy">
-                      {filteredDiscover.length} 个结果，按搜索和标签过滤后分页浏览。
+                      {filteredDiscover.length} 个结果，每页 {DISCOVER_PAGE_SIZE} 个，直接分页浏览，不再整页往下拖。
                     </p>
                   </div>
                   <Pagination
                     page={Math.min(discoverPage, discoverTotalPages)}
                     totalPages={discoverTotalPages}
-                    onChange={setDiscoverPage}
+                    onChange={changeDiscoverPage}
                   />
                 </div>
 
@@ -1375,7 +1338,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 <Pagination
                   page={Math.min(discoverPage, discoverTotalPages)}
                   totalPages={discoverTotalPages}
-                  onChange={setDiscoverPage}
+                  onChange={changeDiscoverPage}
                 />
               </section>
             </>
@@ -1443,19 +1406,19 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 </div>
               ) : null}
 
-              <section className="mvp-section">
+              <section ref={librarySectionRef} className="mvp-section">
                 <div className="mvp-section-head">
                   <div>
                     <span>INSTALLED</span>
                     <h2>{getLibraryLabel(libraryTab)} 已安装</h2>
                     <p className="mvp-section-copy">
-                      {filteredLibrary.length} 个结果，简介收纳到两行，点查看再展开完整详情。
+                      {filteredLibrary.length} 个结果，每页 {LIBRARY_PAGE_SIZE} 个，简介收纳到两行，点查看再展开完整详情。
                     </p>
                   </div>
                   <Pagination
                     page={Math.min(libraryPage, libraryTotalPages)}
                     totalPages={libraryTotalPages}
-                    onChange={setLibraryPage}
+                    onChange={changeLibraryPage}
                   />
                 </div>
 
@@ -1562,7 +1525,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 <Pagination
                   page={Math.min(libraryPage, libraryTotalPages)}
                   totalPages={libraryTotalPages}
-                  onChange={setLibraryPage}
+                  onChange={changeLibraryPage}
                 />
               </section>
             </>
