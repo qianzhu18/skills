@@ -34,49 +34,31 @@ type SkillStoreAppProps = {
   initialData: DashboardData;
 };
 
-type PageTab = "discover" | "library";
-type LibraryTab = "claude" | "codex";
-type CompatibilityFilter = "all" | LibraryTab;
+type InstalledLibraryId = "claude" | "codex";
+type LibraryTab = "all" | InstalledLibraryId;
 type RiskFilter = "all" | "safe" | "scripted" | "high";
-type InstallState = "missing" | "installed";
 
-const DISCOVER_PAGE_SIZE = 9;
 const LIBRARY_PAGE_SIZE = 10;
-
-type DiscoverItem = {
-  id: string;
-  name: string;
-  description: string;
-  compatibility: LibraryTab[];
-  tags: string[];
-  discoverSources: DiscoverSkill[];
-  trust: DiscoverSkill["trust"];
-  installState: Record<LibraryTab, InstallState>;
-};
 
 type LibraryItem = {
   id: string;
   name: string;
   description: string;
-  libraryId: LibraryTab;
+  installedIn: InstalledLibraryId[];
   tags: string[];
   trust: WorkspaceSkill["trust"];
-  record: WorkspaceSkill;
+  records: Partial<Record<InstalledLibraryId, WorkspaceSkill>>;
+  primaryRecord: WorkspaceSkill;
   discoverSources: DiscoverSkill[];
 };
 
-type DrawerTarget =
-  | {
-      kind: "discover";
-      skillId: string;
-    }
-  | {
-      kind: "library";
-      skillId: string;
-      libraryId: LibraryTab;
-    };
+type DrawerTarget = {
+  kind: "library";
+  skillId: string;
+};
 
 const LIBRARY_LABELS: Record<LibraryTab, string> = {
+  all: "全部 Skills",
   claude: "Claude Code",
   codex: "Codex",
 };
@@ -94,6 +76,10 @@ function paginateItems<T>(items: T[], page: number, pageSize: number) {
 
 function getLibraryLabel(libraryId: LibraryTab) {
   return LIBRARY_LABELS[libraryId];
+}
+
+function joinLibraryLabels(libraryIds: InstalledLibraryId[]) {
+  return libraryIds.map((libraryId) => getLibraryLabel(libraryId)).join(" / ");
 }
 
 function scoreQuery(query: string, fields: string[]) {
@@ -132,40 +118,33 @@ function getMetaTags(data: DashboardData, skillId: string) {
   return unique([...(record?.generatedTags ?? []), ...(record?.tags ?? [])]);
 }
 
-function buildDiscoverItems(data: DashboardData): DiscoverItem[] {
-  const byId = new Map<string, DiscoverSkill[]>();
+function pickHighestRiskTrust(trusts: WorkspaceSkill["trust"][]) {
+  return (
+    trusts.find((trust) => trust.riskLevel === "high") ??
+    trusts.find((trust) => trust.riskLevel === "medium") ??
+    trusts[0]
+  );
+}
+
+function buildLibraryItems(data: DashboardData): LibraryItem[] {
+  const discoverById = new Map<string, DiscoverSkill[]>();
+  const installedById = new Map<string, WorkspaceSkill[]>();
 
   data.discoverSkills.forEach((skill) => {
-    if (!skill.compatibility.some((entry) => entry === "claude" || entry === "codex")) {
-      return;
-    }
-
-    byId.set(skill.id, [...(byId.get(skill.id) ?? []), skill]);
+    discoverById.set(skill.id, [...(discoverById.get(skill.id) ?? []), skill]);
   });
 
-  const installedByLibrary = new Map<
-    LibraryTab,
-    Map<string, WorkspaceSkill["libraryState"]>
-  >([
-    [
-      "claude",
-      new Map(
-        data.workspaceSkills
-          .filter((skill) => skill.sourceId === "claude")
-          .map((skill) => [skill.id, skill.libraryState]),
-      ),
-    ],
-    [
-      "codex",
-      new Map(
-        data.workspaceSkills
-          .filter((skill) => skill.sourceId === "codex")
-          .map((skill) => [skill.id, skill.libraryState]),
-      ),
-    ],
-  ]);
+  data.workspaceSkills
+    .filter(
+      (skill) =>
+        skill.libraryState === "enabled" &&
+        (skill.sourceId === "claude" || skill.sourceId === "codex"),
+    )
+    .forEach((skill) => {
+      installedById.set(skill.id, [...(installedById.get(skill.id) ?? []), skill]);
+    });
 
-  return Array.from(byId.entries())
+  return Array.from(installedById.entries())
     .map(([skillId, records]) => {
       const primary = records[0];
 
@@ -173,47 +152,16 @@ function buildDiscoverItems(data: DashboardData): DiscoverItem[] {
         id: skillId,
         name: primary.name,
         description: primary.description,
-        compatibility: unique(records.flatMap((record) => record.compatibility)) as LibraryTab[],
+        installedIn: unique(records.map((record) => record.sourceId)) as InstalledLibraryId[],
         tags: getMetaTags(data, skillId),
-        discoverSources: records,
-        trust:
-          records.find((record) => record.trust.riskLevel === "high")?.trust ??
-          records.find((record) => record.trust.riskLevel === "medium")?.trust ??
-          primary.trust,
-        installState: {
-          claude:
-            installedByLibrary.get("claude")?.get(skillId) === "enabled"
-              ? "installed"
-              : "missing",
-          codex:
-            installedByLibrary.get("codex")?.get(skillId) === "enabled"
-              ? "installed"
-              : "missing",
-        },
-      } satisfies DiscoverItem;
+        trust: pickHighestRiskTrust(records.map((record) => record.trust)),
+        records: Object.fromEntries(
+          records.map((record) => [record.sourceId, record]),
+        ) as Partial<Record<InstalledLibraryId, WorkspaceSkill>>,
+        primaryRecord: primary,
+        discoverSources: discoverById.get(skillId) ?? [],
+      } satisfies LibraryItem;
     })
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function buildLibraryItems(data: DashboardData, libraryId: LibraryTab): LibraryItem[] {
-  const discoverById = new Map<string, DiscoverSkill[]>();
-
-  data.discoverSkills.forEach((skill) => {
-    discoverById.set(skill.id, [...(discoverById.get(skill.id) ?? []), skill]);
-  });
-
-  return data.workspaceSkills
-    .filter((skill) => skill.sourceId === libraryId && skill.libraryState === "enabled")
-    .map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      libraryId,
-      tags: getMetaTags(data, skill.id),
-      trust: skill.trust,
-      record: skill,
-      discoverSources: discoverById.get(skill.id) ?? [],
-    }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -241,36 +189,20 @@ function riskTone(trust: DiscoverSkill["trust"]) {
   return "good";
 }
 
-function supportsLibrary(item: DiscoverItem, target: LibraryTab) {
-  return item.compatibility.includes(target);
-}
-
-function canInstallTarget(item: DiscoverItem, target: LibraryTab) {
-  return supportsLibrary(item, target) && item.installState[target] !== "installed";
-}
-
-function installLabel(state: InstallState, supported: boolean) {
-  if (!supported) {
-    return "暂未收录";
+function matchesTrustFilter(trust: DiscoverSkill["trust"], riskFilter: RiskFilter) {
+  if (riskFilter === "safe" && trust.riskLevel !== "low") {
+    return false;
   }
 
-  if (state === "installed") {
-    return "已安装";
+  if (riskFilter === "scripted" && !trust.hasScripts) {
+    return false;
   }
 
-  return "安装";
-}
-
-function installTone(state: InstallState, supported: boolean) {
-  if (!supported) {
-    return "disabled";
+  if (riskFilter === "high" && trust.riskLevel !== "high") {
+    return false;
   }
 
-  if (state === "installed") {
-    return "good";
-  }
-
-  return "plain";
+  return true;
 }
 
 function sourceTrustLabel(sourceTrust: DiscoverSkill["trust"]["sourceTrust"]) {
@@ -307,6 +239,20 @@ function formatInstalls(installs: number) {
   }
 
   return String(installs);
+}
+
+function remoteInstallButtonText(
+  item: RemoteDiscoverSkill,
+  target: InstalledLibraryId,
+  installed: boolean,
+) {
+  const targetLabel = target === "claude" ? "Claude" : "Codex";
+
+  if (!item.compatibility.includes(target)) {
+    return `未收录 ${targetLabel}`;
+  }
+
+  return `${installed ? "已安装" : "安装"} ${targetLabel}`;
 }
 
 async function parseResponse(response: Response) {
@@ -419,16 +365,12 @@ function Pagination({
 
 export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [data, setData] = useState(initialData);
-  const [pageTab, setPageTab] = useState<PageTab>("discover");
-  const [libraryTab, setLibraryTab] = useState<LibraryTab>("claude");
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("all");
   const [search, setSearch] = useState("");
-  const [compatibilityFilter, setCompatibilityFilter] =
-    useState<CompatibilityFilter>("all");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
-  const [discoverPage, setDiscoverPage] = useState(1);
   const [libraryPage, setLibraryPage] = useState(1);
   const [remoteDiscoverResults, setRemoteDiscoverResults] = useState<RemoteDiscoverSkill[]>(
     [],
@@ -442,26 +384,36 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [detailsCache, setDetailsCache] = useState<Record<string, SkillDetail>>({});
   const [previewKey, setPreviewKey] = useState<string | null>(null);
-  const discoverSectionRef = useRef<HTMLElement | null>(null);
   const librarySectionRef = useRef<HTMLElement | null>(null);
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
-  const discoverItems = useMemo(() => buildDiscoverItems(data), [data]);
+  const allLibraryItems = useMemo(() => buildLibraryItems(data), [data]);
   const libraryItems = useMemo(
-    () => buildLibraryItems(data, libraryTab),
-    [data, libraryTab],
+    () =>
+      libraryTab === "all"
+        ? allLibraryItems
+        : allLibraryItems.filter((item) => item.installedIn.includes(libraryTab)),
+    [allLibraryItems, libraryTab],
   );
   const librarySummaries = useMemo(
     () =>
       data.librarySummaries.filter(
-        (summary): summary is typeof summary & { id: LibraryTab } =>
+        (summary): summary is typeof summary & { id: InstalledLibraryId } =>
           summary.id === "claude" || summary.id === "codex",
       ),
     [data.librarySummaries],
   );
   const activeSummary = useMemo(
-    () => librarySummaries.find((summary) => summary.id === libraryTab) ?? null,
+    () =>
+      libraryTab === "all"
+        ? null
+        : librarySummaries.find((summary) => summary.id === libraryTab) ?? null,
     [librarySummaries, libraryTab],
+  );
+  const totalManagedCount = allLibraryItems.length;
+  const totalInstallationCount = useMemo(
+    () => librarySummaries.reduce((total, summary) => total + summary.enabledCount, 0),
+    [librarySummaries],
   );
   const availableTags = useMemo(
     () =>
@@ -486,86 +438,13 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     [data.workspaceSkills],
   );
 
-  const filteredDiscover = useMemo(() => {
-    return discoverItems
-      .filter((item) => {
-        if (
-          compatibilityFilter !== "all" &&
-          !item.compatibility.includes(compatibilityFilter)
-        ) {
-          return false;
-        }
-
-        if (riskFilter === "safe" && item.trust.riskLevel !== "low") {
-          return false;
-        }
-
-        if (riskFilter === "scripted" && !item.trust.hasScripts) {
-          return false;
-        }
-
-        if (riskFilter === "high" && item.trust.riskLevel !== "high") {
-          return false;
-        }
-
-        if (selectedTag && !item.tags.includes(selectedTag)) {
-          return false;
-        }
-
-        if (!deferredSearch) {
-          return true;
-        }
-
-        return [
-          item.name,
-          item.description,
-          ...item.tags,
-          ...item.compatibility,
-          ...item.discoverSources.map((entry) => entry.discoverSourceLabel),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(deferredSearch);
-      })
-      .sort((left, right) => {
-        if (!deferredSearch) {
-          return left.name.localeCompare(right.name);
-        }
-
-        const leftScore = scoreQuery(deferredSearch, [
-          left.name,
-          `/${left.name}`,
-          ...left.tags,
-          left.description,
-          ...left.compatibility,
-          ...left.discoverSources.map((entry) => entry.discoverSourceLabel),
-        ]);
-        const rightScore = scoreQuery(deferredSearch, [
-          right.name,
-          `/${right.name}`,
-          ...right.tags,
-          right.description,
-          ...right.compatibility,
-          ...right.discoverSources.map((entry) => entry.discoverSourceLabel),
-        ]);
-
-        if (leftScore !== rightScore) {
-          return rightScore - leftScore;
-        }
-
-        return left.name.localeCompare(right.name);
-      });
-  }, [
-    compatibilityFilter,
-    deferredSearch,
-    discoverItems,
-    riskFilter,
-    selectedTag,
-  ]);
-
   const filteredLibrary = useMemo(() => {
     return libraryItems
       .filter((item) => {
+        if (!matchesTrustFilter(item.trust, riskFilter)) {
+          return false;
+        }
+
         if (selectedTag && !item.tags.includes(selectedTag)) {
           return false;
         }
@@ -577,7 +456,10 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         return [
           item.name,
           item.description,
-          item.record.relativePath,
+          ...item.installedIn.map((entry) => getLibraryLabel(entry)),
+          ...item.installedIn
+            .map((entry) => item.records[entry]?.relativePath)
+            .filter((value): value is string => Boolean(value)),
           ...item.tags,
         ]
           .join(" ")
@@ -594,14 +476,20 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           `/${left.name}`,
           ...left.tags,
           left.description,
-          left.record.relativePath,
+          ...left.installedIn.map((entry) => getLibraryLabel(entry)),
+          ...left.installedIn
+            .map((entry) => left.records[entry]?.relativePath)
+            .filter((value): value is string => Boolean(value)),
         ]);
         const rightScore = scoreQuery(deferredSearch, [
           right.name,
           `/${right.name}`,
           ...right.tags,
           right.description,
-          right.record.relativePath,
+          ...right.installedIn.map((entry) => getLibraryLabel(entry)),
+          ...right.installedIn
+            .map((entry) => right.records[entry]?.relativePath)
+            .filter((value): value is string => Boolean(value)),
         ]);
 
         if (leftScore !== rightScore) {
@@ -610,35 +498,40 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
 
         return left.name.localeCompare(right.name);
       });
-  }, [deferredSearch, libraryItems, selectedTag]);
+  }, [deferredSearch, libraryItems, selectedTag, riskFilter]);
 
-  const discoverTaggedCount = filteredDiscover.filter((item) => item.tags.length > 0).length;
-  const libraryTaggedCount = filteredLibrary.filter((item) => item.tags.length > 0).length;
+  const filteredRemoteResults = useMemo(() => {
+    return remoteDiscoverResults.filter((item) => {
+      if (libraryTab !== "all" && !item.compatibility.includes(libraryTab)) {
+        return false;
+      }
+
+      if (!matchesTrustFilter(item.trust, riskFilter)) {
+        return false;
+      }
+
+      if (selectedTag && !item.tags.includes(selectedTag)) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [libraryTab, remoteDiscoverResults, riskFilter, selectedTag]);
+
   const libraryScriptedCount = filteredLibrary.filter((item) => item.trust.hasScripts).length;
   const libraryRiskCount = filteredLibrary.filter(
     (item) => item.trust.riskLevel === "high",
   ).length;
-  const discoverTotalPages = Math.max(
-    1,
-    Math.ceil(filteredDiscover.length / DISCOVER_PAGE_SIZE),
-  );
   const libraryTotalPages = Math.max(
     1,
     Math.ceil(filteredLibrary.length / LIBRARY_PAGE_SIZE),
-  );
-  const pagedDiscover = paginateItems(
-    filteredDiscover,
-    Math.min(discoverPage, discoverTotalPages),
-    DISCOVER_PAGE_SIZE,
   );
   const pagedLibrary = paginateItems(
     filteredLibrary,
     Math.min(libraryPage, libraryTotalPages),
     LIBRARY_PAGE_SIZE,
   );
-  const currentScopeIds = unique(
-    (pageTab === "discover" ? filteredDiscover : filteredLibrary).map((item) => item.id),
-  );
+  const currentScopeIds = unique(filteredLibrary.map((item) => item.id));
 
   async function applyDashboard(nextData: DashboardData) {
     startTransition(() => {
@@ -717,21 +610,16 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     }
 
     const params = new URLSearchParams(window.location.search);
-    const nextPageTab = params.get("tab");
     const nextLibraryTab = params.get("library");
 
-    if (nextPageTab === "discover" || nextPageTab === "library") {
-      setPageTab(nextPageTab);
-    }
-
-    if (nextLibraryTab === "claude" || nextLibraryTab === "codex") {
+    if (nextLibraryTab === "all" || nextLibraryTab === "claude" || nextLibraryTab === "codex") {
       setLibraryTab(nextLibraryTab);
     }
   }, []);
 
   useEffect(() => {
     setSelectedIds([]);
-  }, [libraryTab, pageTab]);
+  }, [libraryTab]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -739,29 +627,20 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     }
 
     const params = new URLSearchParams(window.location.search);
-    params.set("tab", pageTab);
-
-    if (pageTab === "library") {
-      params.set("library", libraryTab);
-    } else {
-      params.delete("library");
-    }
+    params.set("library", libraryTab);
+    params.delete("tab");
 
     const nextQuery = params.toString();
     const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
     window.history.replaceState(null, "", nextUrl);
-  }, [libraryTab, pageTab]);
-
-  useEffect(() => {
-    setDiscoverPage(1);
-  }, [compatibilityFilter, deferredSearch, riskFilter, selectedTag]);
+  }, [libraryTab]);
 
   useEffect(() => {
     setLibraryPage(1);
-  }, [deferredSearch, libraryTab, selectedTag]);
+  }, [deferredSearch, libraryTab, riskFilter, selectedTag]);
 
   useEffect(() => {
-    if (pageTab !== "discover" || deferredSearch.length < 2) {
+    if (deferredSearch.length < 2) {
       setRemoteDiscoverResults([]);
       setRemoteDiscoverLoading(false);
       setRemoteDiscoverError(null);
@@ -809,46 +688,27 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [deferredSearch, pageTab]);
+  }, [deferredSearch]);
 
   const drawerSources = useMemo(() => {
     if (!drawerTarget) {
       return [];
     }
 
-    if (drawerTarget.kind === "discover") {
-      const item = discoverItems.find((entry) => entry.id === drawerTarget.skillId);
-
-      if (!item) {
-        return [];
-      }
-
-      return item.discoverSources.map((source) => ({
-        key: `discover:${source.discoverSourceId}:${source.id}`,
-        label: source.discoverSourceLabel,
-        sourceId: source.discoverSourceId,
-        skillId: source.id,
-        locationType: "discover" as const,
-      }));
-    }
-
-    const item = libraryItems.find(
-      (entry) =>
-        entry.id === drawerTarget.skillId && entry.libraryId === drawerTarget.libraryId,
-    );
+    const item = allLibraryItems.find((entry) => entry.id === drawerTarget.skillId);
 
     if (!item) {
       return [];
     }
 
     return [
-      {
-        key: `library:${item.libraryId}:${item.id}`,
-        label: `${getLibraryLabel(item.libraryId)} 已安装版本`,
-        sourceId: item.libraryId,
+      ...item.installedIn.map((libraryId) => ({
+        key: `library:${libraryId}:${item.id}`,
+        label: `${getLibraryLabel(libraryId)} 已安装版本`,
+        sourceId: libraryId,
         skillId: item.id,
         locationType: "library" as const,
-      },
+      })),
       ...item.discoverSources.map((source) => ({
         key: `discover:${source.discoverSourceId}:${source.id}`,
         label: source.discoverSourceLabel,
@@ -857,7 +717,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         locationType: "discover" as const,
       })),
     ];
-  }, [discoverItems, drawerTarget, libraryItems]);
+  }, [allLibraryItems, drawerTarget]);
 
   useEffect(() => {
     if (!drawerSources.length) {
@@ -875,17 +735,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     ? `${activePreview.locationType}:${activePreview.sourceId}:${activePreview.skillId}`
     : null;
   const activeDetail = detailCacheKey ? detailsCache[detailCacheKey] : undefined;
-  const activeDrawerDiscoverItem =
-    drawerTarget?.kind === "discover"
-      ? discoverItems.find((item) => item.id === drawerTarget.skillId) ?? null
-      : null;
-  const activeDrawerLibraryItem =
-    drawerTarget?.kind === "library"
-      ? libraryItems.find(
-          (item) =>
-            item.id === drawerTarget.skillId && item.libraryId === drawerTarget.libraryId,
-        ) ?? null
-      : null;
+  const activeDrawerLibraryItem = drawerTarget
+    ? allLibraryItems.find((item) => item.id === drawerTarget.skillId) ?? null
+    : null;
 
   useEffect(() => {
     if (!activePreview || !detailCacheKey || detailsCache[detailCacheKey]) {
@@ -941,40 +793,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     };
   }, [activePreview, detailCacheKey, detailsCache]);
 
-  async function installToLibrary(item: DiscoverItem, target: LibraryTab) {
-    if (!supportsLibrary(item, target)) {
-      setNotice({
-        kind: "error",
-        text: `${item.name} 当前还没有可直接安装到 ${getLibraryLabel(target)} 的收录版本。`,
-      });
-      return;
-    }
-
-    const preferredSource = item.discoverSources.find((source) =>
-      source.compatibility.includes(target),
-    );
-
-    if (!preferredSource) {
-      setNotice({
-        kind: "error",
-        text: `${item.name} 当前还没有可直接安装到 ${getLibraryLabel(target)} 的收录版本。`,
-      });
-      return;
-    }
-
-    await runAction(
-      "/api/actions/install-discover",
-      {
-        skillId: item.id,
-        discoverSourceId: preferredSource.discoverSourceId,
-        libraryId: target,
-      },
-      `install:${item.id}:${target}`,
-      `已把 ${item.name} 安装到 ${getLibraryLabel(target)}。`,
-    );
-  }
-
-  async function installRemoteToLibrary(item: RemoteDiscoverSkill, target: LibraryTab) {
+  async function installRemoteToLibrary(item: RemoteDiscoverSkill, target: InstalledLibraryId) {
     await runAction(
       "/api/actions/install-remote",
       {
@@ -987,19 +806,68 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     );
   }
 
-  async function uninstallLibraryItem(item: LibraryItem) {
-    if (!window.confirm(`确认从 ${getLibraryLabel(item.libraryId)} 删除 ${item.name} 吗？`)) {
+  function getRemovalTargets(item: LibraryItem): InstalledLibraryId[] {
+    if (libraryTab === "all") {
+      return item.installedIn;
+    }
+
+    return item.installedIn.filter((entry) => entry === libraryTab);
+  }
+
+  async function removeSkillFromLibraries(
+    skillId: string,
+    targetLibraries: InstalledLibraryId[],
+    successText: string,
+  ) {
+    if (targetLibraries.length === 0) {
       return;
     }
 
-    await runAction(
-      "/api/actions/remove-library",
-      {
-        skillId: item.id,
-        libraryId: item.libraryId,
-      },
-      `uninstall:${item.id}:${item.libraryId}`,
-      `已删除 ${item.name}。`,
+    setBusyKey(`uninstall:${skillId}:${targetLibraries.join(",")}`);
+    setNotice(null);
+
+    try {
+      for (const libraryId of targetLibraries) {
+        const response = await fetch("/api/actions/remove-library", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skillId, libraryId }),
+        });
+        const payload = await parseResponse(response);
+
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message ?? "删除失败。");
+        }
+      }
+
+      const nextDashboard = await fetchDashboardData();
+      await applyDashboard(nextDashboard);
+      setNotice({ kind: "success", text: successText });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "删除失败。",
+      });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function uninstallLibraryItem(item: LibraryItem, targetLibraries = getRemovalTargets(item)) {
+    if (targetLibraries.length === 0) {
+      return;
+    }
+
+    const label = joinLibraryLabels(targetLibraries);
+
+    if (!window.confirm(`确认从 ${label} 删除 ${item.name} 吗？`)) {
+      return;
+    }
+
+    await removeSkillFromLibraries(
+      item.id,
+      targetLibraries,
+      `已从 ${label} 删除 ${item.name}。`,
     );
   }
 
@@ -1036,14 +904,23 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     try {
       for (const item of targets) {
         if (action === "uninstall") {
-          await fetch("/api/actions/remove-library", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              skillId: item.id,
-              libraryId: item.libraryId,
-            }),
-          });
+          const targetLibraries = getRemovalTargets(item);
+
+          for (const libraryId of targetLibraries) {
+            const response = await fetch("/api/actions/remove-library", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                skillId: item.id,
+                libraryId,
+              }),
+            });
+            const payload = await parseResponse(response);
+
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.message ?? "批量删除失败。");
+            }
+          }
         }
       }
 
@@ -1063,17 +940,12 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     }
   }
 
-  function changeDiscoverPage(nextPage: number) {
-    setDiscoverPage(nextPage);
-    discoverSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   function changeLibraryPage(nextPage: number) {
     setLibraryPage(nextPage);
     librarySectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function isRemoteInstalled(skillId: string, target: LibraryTab) {
+  function isRemoteInstalled(skillId: string, target: InstalledLibraryId) {
     return installedSkillIdsByLibrary[target].has(skillId);
   }
 
@@ -1084,26 +956,9 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
           <div className="mvp-logo">千</div>
           <div>
             <strong>千逐 Skill 管理器</strong>
-            <span>Discover / Install / Library / Batch / Trust</span>
+            <span>Search / Install / Manage / Trust</span>
           </div>
         </div>
-
-        <nav className="mvp-nav">
-          <button
-            type="button"
-            className={pageTab === "discover" ? "active" : ""}
-            onClick={() => setPageTab("discover")}
-          >
-            Discover
-          </button>
-          <button
-            type="button"
-            className={pageTab === "library" ? "active" : ""}
-            onClick={() => setPageTab("library")}
-          >
-            Library
-          </button>
-        </nav>
 
         <div className="mvp-tools">
           <label className="mvp-search">
@@ -1137,174 +992,99 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
 
       <div className="mvp-body">
         <aside className="mvp-sidebar">
-          {pageTab === "discover" ? (
-            <>
-              <section className="mvp-sidebar-card">
-                <h3>发现范围</h3>
+          <section className="mvp-sidebar-card">
+            <h3>我的技能库</h3>
+            <div className="mvp-library-switch">
+              <button
+                type="button"
+                className={libraryTab === "all" ? "active" : ""}
+                onClick={() => setLibraryTab("all")}
+              >
+                全部 Skills
+                <strong>{totalManagedCount}</strong>
+              </button>
+              <p className="mvp-sidebar-meta">共 {totalInstallationCount} 个安装实例</p>
+            </div>
+            {librarySummaries.map((summary) => (
+              <div key={summary.id} className="mvp-library-switch">
                 <button
                   type="button"
-                  className={compatibilityFilter === "all" ? "active" : ""}
-                  onClick={() => setCompatibilityFilter("all")}
+                  className={libraryTab === summary.id ? "active" : ""}
+                  onClick={() => setLibraryTab(summary.id)}
                 >
-                  全部技能
-                  <strong>{discoverItems.length}</strong>
+                  {getLibraryLabel(summary.id)}
+                  <strong>{summary.enabledCount}</strong>
                 </button>
-                <button
-                  type="button"
-                  className={compatibilityFilter === "claude" ? "active" : ""}
-                  onClick={() => setCompatibilityFilter("claude")}
-                >
-                  Claude Code
-                  <strong>
-                    {
-                      discoverItems.filter((item) => item.compatibility.includes("claude"))
-                        .length
+                <p className="mvp-sidebar-meta">已安装 {summary.enabledCount}</p>
+              </div>
+            ))}
+            <p className="mvp-sidebar-note">
+              这里就是你的 skills 管理页。主表格只管已安装 skills，外部搜索只是补充入口。
+            </p>
+          </section>
+
+          <section className="mvp-sidebar-card">
+            <h3>Trust Layer</h3>
+            <button
+              type="button"
+              className={riskFilter === "all" ? "active" : ""}
+              onClick={() => setRiskFilter("all")}
+            >
+              全部风险级别
+            </button>
+            <button
+              type="button"
+              className={riskFilter === "safe" ? "active" : ""}
+              onClick={() => setRiskFilter("safe")}
+            >
+              低风险
+            </button>
+            <button
+              type="button"
+              className={riskFilter === "scripted" ? "active" : ""}
+              onClick={() => setRiskFilter("scripted")}
+            >
+              含脚本
+            </button>
+            <button
+              type="button"
+              className={riskFilter === "high" ? "active" : ""}
+              onClick={() => setRiskFilter("high")}
+            >
+              高风险
+            </button>
+            <p className="mvp-sidebar-note">
+              风险会综合脚本文件、安装钩子、包管理脚本和远端审计，不再只是粗糙分级。
+            </p>
+          </section>
+
+          <section className="mvp-sidebar-card">
+            <div className="mvp-sidebar-title">
+              <Tags size={14} />
+              标签
+            </div>
+            <div className="mvp-tag-cloud">
+              {availableTags.length === 0 ? (
+                <p>首次会自动生成一轮标签，后面你再自己整理。</p>
+              ) : (
+                availableTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={selectedTag === tag ? "active" : ""}
+                    onClick={() =>
+                      setSelectedTag((current) => (current === tag ? null : tag))
                     }
-                  </strong>
-                </button>
-                <button
-                  type="button"
-                  className={compatibilityFilter === "codex" ? "active" : ""}
-                  onClick={() => setCompatibilityFilter("codex")}
-                >
-                  Codex
-                  <strong>
-                    {
-                      discoverItems.filter((item) => item.compatibility.includes("codex"))
-                        .length
-                    }
-                  </strong>
-                </button>
-                <p className="mvp-sidebar-note">
-                  搜索框现在会同时帮你查本地收录和 skills.sh 结果，像应用商店一样先找再装。
-                </p>
-              </section>
-
-              <section className="mvp-sidebar-card">
-                <h3>Trust Layer</h3>
-                <button
-                  type="button"
-                  className={riskFilter === "all" ? "active" : ""}
-                  onClick={() => setRiskFilter("all")}
-                >
-                  全部风险级别
-                </button>
-                <button
-                  type="button"
-                  className={riskFilter === "safe" ? "active" : ""}
-                  onClick={() => setRiskFilter("safe")}
-                >
-                  低风险
-                </button>
-                <button
-                  type="button"
-                  className={riskFilter === "scripted" ? "active" : ""}
-                  onClick={() => setRiskFilter("scripted")}
-                >
-                  含脚本
-                </button>
-                <button
-                  type="button"
-                  className={riskFilter === "high" ? "active" : ""}
-                  onClick={() => setRiskFilter("high")}
-                >
-                  高风险
-                </button>
-                <p className="mvp-sidebar-note">
-                  风险不再只看“有没有命令”，而是综合脚本文件、安装钩子、包管理脚本和远端审计。
-                </p>
-              </section>
-
-              <section className="mvp-sidebar-card">
-                <div className="mvp-sidebar-title">
-                  <Tags size={14} />
-                  标签
-                </div>
-                <div className="mvp-tag-cloud">
-                  {availableTags.length === 0 ? (
-                    <p>首次会自动生成一轮标签；你后面只需要手动整理和补充。</p>
-                  ) : (
-                    availableTags.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={selectedTag === tag ? "active" : ""}
-                        onClick={() =>
-                          setSelectedTag((current) => (current === tag ? null : tag))
-                        }
-                      >
-                        {tag}
-                      </button>
-                    ))
-                  )}
-                </div>
-                <p className="mvp-sidebar-note">
-                  标签会先自动打一轮，后面就交给你自己维护，不把来源和风险混进标签里。
-                </p>
-              </section>
-            </>
-          ) : (
-            <>
-              <section className="mvp-sidebar-card">
-                <h3>已安装库</h3>
-                {librarySummaries.map((summary) => (
-                  <div key={summary.id} className="mvp-library-switch">
-                    <button
-                      type="button"
-                      className={libraryTab === summary.id ? "active" : ""}
-                      onClick={() => setLibraryTab(summary.id)}
-                    >
-                      {getLibraryLabel(summary.id)}
-                      <strong>{summary.enabledCount}</strong>
-                    </button>
-                    <p className="mvp-sidebar-meta">已安装 {summary.enabledCount}</p>
-                  </div>
-                ))}
-              </section>
-
-              <section className="mvp-sidebar-card">
-                <h3>管理状态</h3>
-                <button
-                  type="button"
-                  className="active"
-                >
-                  全部
-                  <strong>{libraryItems.length}</strong>
-                </button>
-                <p className="mvp-sidebar-note">
-                  Library 只管理本机已安装 skills，只保留删除动作，不再额外设计停用流。
-                </p>
-              </section>
-
-              <section className="mvp-sidebar-card">
-                <div className="mvp-sidebar-title">
-                  <Tags size={14} />
-                  标签
-                </div>
-                <div className="mvp-tag-cloud">
-                  {availableTags.length === 0 ? (
-                    <p>先点右上角生成一次，再用标签筛选已安装库。</p>
-                  ) : (
-                    availableTags.map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={selectedTag === tag ? "active" : ""}
-                        onClick={() =>
-                          setSelectedTag((current) => (current === tag ? null : tag))
-                        }
-                      >
-                        {tag}
-                      </button>
-                    ))
-                  )}
-                </div>
-                <p className="mvp-sidebar-note">
-                  标签先帮你整理第一遍，后面你只需要按标签管理，不用理解底层怎么生成。
-                </p>
-              </section>
-            </>
-          )}
+                  >
+                    {tag}
+                  </button>
+                ))
+              )}
+            </div>
+            <p className="mvp-sidebar-note">
+              标签先自动打一轮，后面按你的管理习惯继续维护，不把来源和风险混进标签里。
+            </p>
+          </section>
         </aside>
 
         <section className="mvp-main">
@@ -1312,441 +1092,308 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             <div className={`mvp-notice mvp-notice-${notice.kind}`}>{notice.text}</div>
           ) : null}
 
-          {pageTab === "discover" ? (
-            <>
-              <section className="mvp-hero">
+          <section className="mvp-hero compact">
+            <div>
+              <span>MY SKILLS</span>
+              <h1>一个面板管好自己的 skills，需要时再顺手搜索外部 skill</h1>
+              <p>
+                主表格始终只展示你本机已经安装的 skills，并且按技能实体聚合，不再把 Claude 和 Codex 拆成两套重复列表。
+                搜索框会同时帮你筛本地管理表，并补充上方的外部 skill 搜索结果。
+              </p>
+            </div>
+            <div className="mvp-hero-metrics">
+              <article>
+                <strong>{libraryTab === "all" ? totalManagedCount : activeSummary?.enabledCount ?? 0}</strong>
+                <span>{libraryTab === "all" ? "已管理 skills" : "已安装"}</span>
+              </article>
+              <article>
+                <strong>{filteredLibrary.length}</strong>
+                <span>当前结果</span>
+              </article>
+              <article>
+                <strong>{libraryScriptedCount}</strong>
+                <span>含脚本</span>
+              </article>
+              <article>
+                <strong>{libraryRiskCount}</strong>
+                <span>高风险</span>
+              </article>
+            </div>
+          </section>
+
+          {deferredSearch.length >= 2 ? (
+            <section className="mvp-section">
+              <div className="mvp-section-head">
                 <div>
-                  <span>DISCOVER</span>
-                  <h1>先看懂 skill 是干嘛的，再一键安装到正确的端</h1>
-                  <p>
-                    Discover 现在会同时展示本地收录和 skills.sh 搜索结果。你先看用途、来源、风险和可安装目标，
-                    再决定装到 Claude Code 还是 Codex，目录和配置细节默认藏起来。
+                  <span>EXTERNAL SEARCH</span>
+                  <h2>外部技能搜索</h2>
+                  <p className="mvp-section-copy">
+                    这里是 `skills.sh` 的补充搜索结果，只负责帮你找新 skill；下面的表格始终是你的本地已安装 skills。
                   </p>
                 </div>
-                <div className="mvp-hero-metrics">
-                  <article>
-                    <strong>{filteredDiscover.length}</strong>
-                    <span>本地收录</span>
-                  </article>
-                  <article>
-                    <strong>
-                      {
-                        filteredDiscover.filter((item) =>
-                          item.compatibility.includes("claude"),
-                        ).length
-                      }
-                    </strong>
-                    <span>可装 Claude</span>
-                  </article>
-                  <article>
-                    <strong>
-                      {
-                        filteredDiscover.filter((item) =>
-                          item.compatibility.includes("codex"),
-                        ).length
-                      }
-                    </strong>
-                    <span>可装 Codex</span>
-                  </article>
-                  <article>
-                    <strong>{deferredSearch.length >= 2 ? remoteDiscoverResults.length : discoverTaggedCount}</strong>
-                    <span>{deferredSearch.length >= 2 ? "skills.sh 结果" : "已有标签"}</span>
-                  </article>
+              </div>
+
+              {remoteDiscoverLoading ? (
+                <div className="mvp-loading">
+                  <LoaderCircle size={22} className="spin" />
+                  正在从 skills.sh 搜索…
                 </div>
-              </section>
+              ) : remoteDiscoverError ? (
+                <EmptyState title="外部搜索暂时不可用" copy={remoteDiscoverError} />
+              ) : filteredRemoteResults.length === 0 ? (
+                <EmptyState
+                  title="没有找到匹配的外部 skill"
+                  copy="换个关键词继续搜，或者放宽左侧的风险和标签筛选。"
+                />
+              ) : (
+                <div className="mvp-discover-grid">
+                  {filteredRemoteResults.map((item) => (
+                    <article key={item.id} className="mvp-discover-card">
+                      <div className="mvp-card-head">
+                        <div className="mvp-card-copy">
+                          <strong>/{item.name}</strong>
+                          <p className="mvp-line-clamp-2">{item.description}</p>
+                        </div>
+                        <a
+                          className="mvp-card-link"
+                          href={item.skillsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          查看
+                        </a>
+                      </div>
 
-              {deferredSearch.length >= 2 ? (
-                <section className="mvp-section">
-                  <div className="mvp-section-head">
-                    <div>
-                      <span>REMOTE SEARCH</span>
-                      <h2>skills.sh 搜索结果</h2>
-                      <p className="mvp-section-copy">
-                        官方 `find-skills` / Vercel skills 搜索入口，优先帮你找可直接安装的新 skill。
-                      </p>
-                    </div>
-                  </div>
+                      <div className="mvp-card-badges">
+                        <Badge tone="plain">skills.sh</Badge>
+                        <Badge tone={sourceTrustTone(item.trust.sourceTrust)}>
+                          {sourceTrustLabel(item.trust.sourceTrust)}
+                        </Badge>
+                        {item.compatibility.includes("claude") ? (
+                          <Badge tone="claude">Claude Code</Badge>
+                        ) : null}
+                        {item.compatibility.includes("codex") ? (
+                          <Badge tone="codex">Codex</Badge>
+                        ) : null}
+                        <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
+                        <Badge tone="plain">{formatInstalls(item.installs)} 安装</Badge>
+                      </div>
 
-                  {remoteDiscoverLoading ? (
-                    <div className="mvp-loading">
-                      <LoaderCircle size={22} className="spin" />
-                      正在从 skills.sh 搜索…
-                    </div>
-                  ) : remoteDiscoverError ? (
-                    <EmptyState
-                      title="skills.sh 搜索暂时不可用"
-                      copy={remoteDiscoverError}
-                    />
-                  ) : remoteDiscoverResults.length === 0 ? (
-                    <EmptyState
-                      title="skills.sh 里没有找到匹配结果"
-                      copy="你可以继续看下面的本地收录结果，或者换个关键词再搜。"
-                    />
-                  ) : (
-                    <div className="mvp-discover-grid">
-                      {remoteDiscoverResults.map((item) => (
-                        <article key={item.id} className="mvp-discover-card">
-                          <div className="mvp-card-head">
-                            <div className="mvp-card-copy">
-                              <strong>/{item.name}</strong>
-                              <p className="mvp-line-clamp-2">{item.description}</p>
-                            </div>
-                            <a
-                              className="mvp-card-link"
-                              href={item.skillsUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              查看
-                            </a>
+                      <div className="mvp-card-tags">
+                        {item.tags.length > 0 ? (
+                          item.tags.map((tag) => <span key={tag}>{tag}</span>)
+                        ) : (
+                          <span className="muted">暂无标签</span>
+                        )}
+                      </div>
+
+                      <div className="mvp-install-row">
+                        <button
+                          type="button"
+                          className={`tone-${isRemoteInstalled(item.skillId, "claude") ? "good" : "plain"}`}
+                          disabled={
+                            !item.compatibility.includes("claude") ||
+                            isRemoteInstalled(item.skillId, "claude")
+                          }
+                          onClick={() => void installRemoteToLibrary(item, "claude")}
+                        >
+                          {remoteInstallButtonText(
+                            item,
+                            "claude",
+                            isRemoteInstalled(item.skillId, "claude"),
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className={`tone-${isRemoteInstalled(item.skillId, "codex") ? "good" : "plain"}`}
+                          disabled={
+                            !item.compatibility.includes("codex") ||
+                            isRemoteInstalled(item.skillId, "codex")
+                          }
+                          onClick={() => void installRemoteToLibrary(item, "codex")}
+                        >
+                          {remoteInstallButtonText(
+                            item,
+                            "codex",
+                            isRemoteInstalled(item.skillId, "codex"),
+                          )}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          <div className="mvp-library-tabs">
+            <button
+              type="button"
+              className={libraryTab === "all" ? "active" : ""}
+              onClick={() => setLibraryTab("all")}
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              className={libraryTab === "claude" ? "active" : ""}
+              onClick={() => setLibraryTab("claude")}
+            >
+              Claude Code
+            </button>
+            <button
+              type="button"
+              className={libraryTab === "codex" ? "active" : ""}
+              onClick={() => setLibraryTab("codex")}
+            >
+              Codex
+            </button>
+          </div>
+
+          {selectedIds.length > 0 ? (
+            <div className="mvp-batch-bar">
+              <span>已选中 {selectedIds.length} 个 skills</span>
+              <div className="mvp-inline-actions">
+                <button type="button" onClick={() => void batchLibraryAction("uninstall")}>
+                  批量删除
+                </button>
+                <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
+                  生成标签
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <section ref={librarySectionRef} className="mvp-section">
+            <div className="mvp-section-head">
+              <div>
+                <span>LIBRARY</span>
+                <h2>{libraryTab === "all" ? "我的全部 Skills" : `${getLibraryLabel(libraryTab)} 已安装`}</h2>
+                <p className="mvp-section-copy">
+                  {filteredLibrary.length} 个结果，每页 {LIBRARY_PAGE_SIZE} 个。表格是你的主管理区，
+                  搜索时上方只额外补充外部 skill，不会再和本地数量混在一起。
+                </p>
+              </div>
+              <Pagination
+                page={Math.min(libraryPage, libraryTotalPages)}
+                totalPages={libraryTotalPages}
+                onChange={changeLibraryPage}
+              />
+            </div>
+
+            {filteredLibrary.length === 0 ? (
+              <EmptyState
+                title="当前筛选下没有匹配的已安装 skills"
+                copy="换个关键词、标签或风险筛选试试；如果要找新 skill，直接用上面的搜索结果安装。"
+              />
+            ) : (
+              <div className="mvp-table-wrap">
+                <table className="mvp-table">
+                  <thead>
+                    <tr>
+                      <th />
+                      <th>Skill</th>
+                      <th>用途</th>
+                      <th>已安装到</th>
+                      <th>标签</th>
+                      <th>Trust</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedLibrary.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(item.id)}
+                            onChange={() =>
+                              setSelectedIds((current) =>
+                                current.includes(item.id)
+                                  ? current.filter((entry) => entry !== item.id)
+                                  : [...current, item.id],
+                              )
+                            }
+                          />
+                        </td>
+                        <td>
+                          <div className="mvp-table-primary">
+                            <strong>/{item.name}</strong>
+                            <span>已管理 {item.installedIn.length} 个安装位置</span>
                           </div>
-
-                          <div className="mvp-card-badges">
-                            <Badge tone="plain">skills.sh</Badge>
-                            <Badge tone={sourceTrustTone(item.trust.sourceTrust)}>
-                              {sourceTrustLabel(item.trust.sourceTrust)}
-                            </Badge>
-                            <Badge tone="claude">Claude Code</Badge>
-                            <Badge tone="codex">Codex</Badge>
-                            <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
-                            <Badge tone="plain">{formatInstalls(item.installs)} 安装</Badge>
+                        </td>
+                        <td>
+                          <p className="mvp-table-description mvp-line-clamp-2">
+                            {item.description}
+                          </p>
+                        </td>
+                        <td>
+                          <div className="mvp-inline-badges">
+                            {item.installedIn.includes("claude") ? (
+                              <Badge tone="claude">Claude Code</Badge>
+                            ) : null}
+                            {item.installedIn.includes("codex") ? (
+                              <Badge tone="codex">Codex</Badge>
+                            ) : null}
                           </div>
-
-                          <div className="mvp-card-tags">
+                        </td>
+                        <td>
+                          <div className="mvp-inline-tags">
                             {item.tags.length > 0 ? (
                               item.tags.map((tag) => <span key={tag}>{tag}</span>)
                             ) : (
-                              <span className="muted">暂无标签</span>
+                              <span className="muted">暂无</span>
                             )}
                           </div>
-
-                          <div className="mvp-install-row">
+                        </td>
+                        <td>
+                          <div className="mvp-inline-badges">
+                            <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
+                            {item.trust.hasScripts ? (
+                              <Badge tone="danger">含脚本</Badge>
+                            ) : (
+                              <Badge tone="good">无脚本</Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="mvp-inline-actions">
                             <button
                               type="button"
-                              className={`tone-${isRemoteInstalled(item.skillId, "claude") ? "good" : "plain"}`}
-                              disabled={isRemoteInstalled(item.skillId, "claude")}
-                              onClick={() => void installRemoteToLibrary(item, "claude")}
+                              onClick={() =>
+                                setDrawerTarget({
+                                  kind: "library",
+                                  skillId: item.id,
+                                })
+                              }
                             >
-                              {isRemoteInstalled(item.skillId, "claude") ? "已安装" : "安装"} Claude
+                              查看
+                            </button>
+                            <button type="button" onClick={() => void generateTags([item.id])}>
+                              标签
                             </button>
                             <button
                               type="button"
-                              className={`tone-${isRemoteInstalled(item.skillId, "codex") ? "good" : "plain"}`}
-                              disabled={isRemoteInstalled(item.skillId, "codex")}
-                              onClick={() => void installRemoteToLibrary(item, "codex")}
+                              className="danger"
+                              onClick={() => void uninstallLibraryItem(item)}
                             >
-                              {isRemoteInstalled(item.skillId, "codex") ? "已安装" : "安装"} Codex
+                              删除
                             </button>
                           </div>
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              ) : null}
-
-              <section ref={discoverSectionRef} className="mvp-section">
-                <div className="mvp-section-head">
-                  <div>
-                    <span>{deferredSearch.length >= 2 ? "LOCAL MATCHES" : "ALL RESULTS"}</span>
-                    <h2>{deferredSearch.length >= 2 ? "本地已收录" : "全部技能"}</h2>
-                    <p className="mvp-section-copy">
-                      {filteredDiscover.length} 个结果，每页 {DISCOVER_PAGE_SIZE} 个，直接分页浏览，不再整页往下拖。
-                    </p>
-                  </div>
-                  <Pagination
-                    page={Math.min(discoverPage, discoverTotalPages)}
-                    totalPages={discoverTotalPages}
-                    onChange={changeDiscoverPage}
-                  />
-                </div>
-
-                {filteredDiscover.length === 0 ? (
-                  <EmptyState
-                    title="没有匹配的 skills"
-                    copy="换个搜索词，或者先点右上角生成标签。"
-                  />
-                ) : (
-                  <div className="mvp-discover-grid">
-                    {pagedDiscover.map((item) => (
-                      <article key={item.id} className="mvp-discover-card">
-                        <div className="mvp-card-head">
-                          <div className="mvp-card-copy">
-                            <strong>/{item.name}</strong>
-                            <p className="mvp-line-clamp-2">{item.description}</p>
-                          </div>
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() =>
-                              setDrawerTarget({ kind: "discover", skillId: item.id })
-                            }
-                          >
-                            查看
-                          </button>
-                        </div>
-
-                        <div className="mvp-card-badges">
-                          <Badge tone={sourceTrustTone(item.trust.sourceTrust)}>
-                            {sourceTrustLabel(item.trust.sourceTrust)}
-                          </Badge>
-                          {item.compatibility.includes("claude") ? (
-                            <Badge tone="claude">Claude Code</Badge>
-                          ) : null}
-                          {item.compatibility.includes("codex") ? (
-                            <Badge tone="codex">Codex</Badge>
-                          ) : null}
-                          <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
-                          {item.trust.hasScripts ? (
-                            <Badge tone="danger">含脚本</Badge>
-                          ) : (
-                            <Badge tone="good">无脚本</Badge>
-                          )}
-                          {item.trust.hasPackageJson ? (
-                            <Badge tone="warn">package.json</Badge>
-                          ) : null}
-                        </div>
-
-                        <div className="mvp-card-tags">
-                          {item.tags.length > 0 ? (
-                            item.tags.map((tag) => <span key={tag}>{tag}</span>)
-                          ) : (
-                            <span className="muted">暂无标签</span>
-                          )}
-                        </div>
-
-                        <div className="mvp-install-row">
-                          <button
-                            type="button"
-                            className={`tone-${installTone(
-                              item.installState.claude,
-                              supportsLibrary(item, "claude"),
-                            )}`}
-                            disabled={!canInstallTarget(item, "claude")}
-                            onClick={() => void installToLibrary(item, "claude")}
-                          >
-                            {installLabel(
-                              item.installState.claude,
-                              supportsLibrary(item, "claude"),
-                            )}{" "}
-                            Claude
-                          </button>
-                          <button
-                            type="button"
-                            className={`tone-${installTone(
-                              item.installState.codex,
-                              supportsLibrary(item, "codex"),
-                            )}`}
-                            disabled={!canInstallTarget(item, "codex")}
-                            onClick={() => void installToLibrary(item, "codex")}
-                          >
-                            {installLabel(
-                              item.installState.codex,
-                              supportsLibrary(item, "codex"),
-                            )}{" "}
-                            Codex
-                          </button>
-                        </div>
-                      </article>
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-                )}
-
-                <Pagination
-                  page={Math.min(discoverPage, discoverTotalPages)}
-                  totalPages={discoverTotalPages}
-                  onChange={changeDiscoverPage}
-                />
-              </section>
-            </>
-          ) : null}
-
-          {pageTab === "library" ? (
-            <>
-              <section className="mvp-hero compact">
-                <div>
-                  <span>LIBRARY</span>
-                  <h1>把 Claude Code 和 Codex 分开管理，不再混淆</h1>
-                  <p>
-                    Library 只显示本机已安装的 skills。这里负责删除和标签管理，把两个端的技能库保持干净，
-                    详情预览统一放到抽屉里展开。
-                  </p>
-                </div>
-                <div className="mvp-hero-metrics">
-                  <article>
-                    <strong>{activeSummary?.enabledCount ?? 0}</strong>
-                    <span>已安装</span>
-                  </article>
-                  <article>
-                    <strong>{libraryRiskCount}</strong>
-                    <span>高风险</span>
-                  </article>
-                  <article>
-                    <strong>{libraryScriptedCount}</strong>
-                    <span>含脚本</span>
-                  </article>
-                  <article>
-                    <strong>{libraryTaggedCount}</strong>
-                    <span>已有标签</span>
-                  </article>
-                </div>
-              </section>
-
-              <div className="mvp-library-tabs">
-                <button
-                  type="button"
-                  className={libraryTab === "claude" ? "active" : ""}
-                  onClick={() => setLibraryTab("claude")}
-                >
-                  Claude Code
-                </button>
-                <button
-                  type="button"
-                  className={libraryTab === "codex" ? "active" : ""}
-                  onClick={() => setLibraryTab("codex")}
-                >
-                  Codex
-                </button>
+                  </tbody>
+                </table>
               </div>
+            )}
 
-              {selectedIds.length > 0 ? (
-                <div className="mvp-batch-bar">
-                  <span>已选中 {selectedIds.length} 个 skills</span>
-                  <div className="mvp-inline-actions">
-                    <button type="button" onClick={() => void batchLibraryAction("uninstall")}>
-                      批量删除
-                    </button>
-                    <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
-                      生成标签
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              <section ref={librarySectionRef} className="mvp-section">
-                <div className="mvp-section-head">
-                  <div>
-                    <span>INSTALLED</span>
-                    <h2>{getLibraryLabel(libraryTab)} 已安装</h2>
-                    <p className="mvp-section-copy">
-                      {filteredLibrary.length} 个结果，每页 {LIBRARY_PAGE_SIZE} 个，简介收纳到两行，点查看再展开完整详情。
-                    </p>
-                  </div>
-                  <Pagination
-                    page={Math.min(libraryPage, libraryTotalPages)}
-                    totalPages={libraryTotalPages}
-                    onChange={changeLibraryPage}
-                  />
-                </div>
-
-                {filteredLibrary.length === 0 ? (
-                  <EmptyState
-                    title="这个技能库里还没有匹配的 skills"
-                    copy="你可以先去 Discover 安装，或者切换 Claude / Codex 查看。"
-                  />
-                ) : (
-                  <div className="mvp-table-wrap">
-                    <table className="mvp-table">
-                      <thead>
-                        <tr>
-                          <th />
-                          <th>Skill</th>
-                          <th>用途</th>
-                          <th>标签</th>
-                          <th>Trust</th>
-                          <th>操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pagedLibrary.map((item) => (
-                          <tr key={`${item.libraryId}:${item.id}`}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={selectedIds.includes(item.id)}
-                                onChange={() =>
-                                  setSelectedIds((current) =>
-                                    current.includes(item.id)
-                                      ? current.filter((entry) => entry !== item.id)
-                                      : [...current, item.id],
-                                  )
-                                }
-                              />
-                            </td>
-                            <td>
-                              <div className="mvp-table-primary">
-                                <strong>/{item.name}</strong>
-                                <span>{item.record.relativePath}</span>
-                              </div>
-                            </td>
-                            <td>
-                              <p className="mvp-table-description mvp-line-clamp-2">
-                                {item.description}
-                              </p>
-                            </td>
-                            <td>
-                              <div className="mvp-inline-tags">
-                                {item.tags.length > 0 ? (
-                                  item.tags.map((tag) => <span key={tag}>{tag}</span>)
-                                ) : (
-                                  <span className="muted">暂无</span>
-                                )}
-                              </div>
-                            </td>
-                            <td>
-                              <div className="mvp-inline-badges">
-                                <Badge tone={riskTone(item.trust)}>{riskLabel(item.trust)}</Badge>
-                                {item.trust.hasScripts ? (
-                                  <Badge tone="danger">含脚本</Badge>
-                                ) : (
-                                  <Badge tone="good">无脚本</Badge>
-                                )}
-                              </div>
-                            </td>
-                            <td>
-                              <div className="mvp-inline-actions">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setDrawerTarget({
-                                      kind: "library",
-                                      skillId: item.id,
-                                      libraryId: item.libraryId,
-                                    })
-                                  }
-                                >
-                                  查看
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void generateTags([item.id])}
-                                >
-                                  标签
-                                </button>
-                                <button
-                                  type="button"
-                                  className="danger"
-                                  onClick={() => void uninstallLibraryItem(item)}
-                                >
-                                  删除
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <Pagination
-                  page={Math.min(libraryPage, libraryTotalPages)}
-                  totalPages={libraryTotalPages}
-                  onChange={changeLibraryPage}
-                />
-              </section>
-            </>
-          ) : null}
+            <Pagination
+              page={Math.min(libraryPage, libraryTotalPages)}
+              totalPages={libraryTotalPages}
+              onChange={changeLibraryPage}
+            />
+          </section>
         </section>
       </div>
 
@@ -1875,47 +1522,21 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                 </div>
 
                 <div className="mvp-drawer-actions">
-                  {drawerTarget.kind === "discover" && activeDrawerDiscoverItem ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={!canInstallTarget(activeDrawerDiscoverItem, "claude")}
-                        className={`tone-${installTone(
-                          activeDrawerDiscoverItem.installState.claude,
-                          supportsLibrary(activeDrawerDiscoverItem, "claude"),
-                        )}`}
-                        onClick={() => void installToLibrary(activeDrawerDiscoverItem, "claude")}
-                      >
-                        {activeDrawerDiscoverItem.installState.claude === "installed"
-                          ? "Claude 已安装"
-                          : "安装到 Claude"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canInstallTarget(activeDrawerDiscoverItem, "codex")}
-                        className={`tone-${installTone(
-                          activeDrawerDiscoverItem.installState.codex,
-                          supportsLibrary(activeDrawerDiscoverItem, "codex"),
-                        )}`}
-                        onClick={() => void installToLibrary(activeDrawerDiscoverItem, "codex")}
-                      >
-                        {activeDrawerDiscoverItem.installState.codex === "installed"
-                          ? "Codex 已安装"
-                          : "安装到 Codex"}
-                      </button>
-                    </>
-                  ) : null}
-
-                  {drawerTarget.kind === "library" && activeDrawerLibraryItem ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void uninstallLibraryItem(activeDrawerLibraryItem)}
-                      >
-                        删除
-                      </button>
-                    </>
-                  ) : null}
+                  {activeDrawerLibraryItem
+                    ? activeDrawerLibraryItem.installedIn.map((libraryId) => (
+                        <button
+                          key={libraryId}
+                          type="button"
+                          onClick={() =>
+                            void uninstallLibraryItem(activeDrawerLibraryItem, [libraryId])
+                          }
+                        >
+                          {activeDrawerLibraryItem.installedIn.length > 1
+                            ? `删除 ${getLibraryLabel(libraryId)}`
+                            : "删除"}
+                        </button>
+                      ))
+                    : null}
 
                   <button
                     type="button"
