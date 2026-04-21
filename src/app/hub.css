@@ -283,6 +283,103 @@ body {
   font-size: 13px;
 }
 
+.mvp-tag-editor {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--mvp-line);
+  border-radius: 20px;
+  background: rgba(248, 250, 252, 0.8);
+}
+
+.mvp-tag-editor-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mvp-tag-editor-head strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--mvp-ink);
+}
+
+.mvp-tag-editor-head p {
+  margin: 6px 0 0;
+  color: var(--mvp-copy-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.mvp-tag-editor-head.ai button,
+.mvp-tag-entry button,
+.mvp-tag-chip-button,
+.mvp-tag-suggestion-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--mvp-line);
+  border-radius: 14px;
+  background: white;
+  color: var(--mvp-copy);
+  cursor: pointer;
+  transition: 160ms ease;
+}
+
+.mvp-tag-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.mvp-tag-entry input {
+  width: 100%;
+  min-width: 0;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--mvp-line);
+  border-radius: 14px;
+  background: white;
+  color: var(--mvp-ink);
+  outline: none;
+}
+
+.mvp-tag-entry input:focus {
+  border-color: var(--mvp-line-strong);
+}
+
+.mvp-tag-entry button,
+.mvp-tag-editor-head.ai button {
+  padding: 0 14px;
+  height: 46px;
+  font-weight: 700;
+}
+
+.mvp-tag-chip-button,
+.mvp-tag-suggestion-button {
+  padding: 8px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mvp-tag-chip-button {
+  color: var(--mvp-ink);
+}
+
+.mvp-tag-suggestion-button {
+  border-style: dashed;
+  color: var(--mvp-blue);
+}
+
+.mvp-tag-suggestion-button span {
+  color: var(--mvp-copy-soft);
+  font-size: 11px;
+}
+
 .mvp-main {
   padding: 20px;
 }
@@ -817,6 +914,13 @@ body {
 
   .mvp-info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mvp-tag-entry,
+  .mvp-tag-editor-head {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .mvp-pagination {

@@ -271,7 +271,7 @@ async function loadSkillMetaState(): Promise<SkillMetaState> {
   const tagCatalog = Array.from(
     new Set(
       Object.values(records)
-        .flatMap((record) => [...record.tags, ...(record.generatedTags ?? [])])
+        .flatMap((record) => record.tags)
         .map((tag) => tag.trim())
         .filter(Boolean),
     ),
@@ -1122,64 +1122,6 @@ async function writeCatalogIndex(
   await fs.writeFile(indexPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
-async function ensureGeneratedTags(
-  meta: SkillMetaState,
-  records: SkillRecord[],
-) {
-  const nextRecords = { ...meta.records };
-  const missingSkillIds = unique(
-    records
-      .map((record) => record.id)
-      .filter((skillId) => (nextRecords[skillId]?.generatedTags?.length ?? 0) === 0),
-  );
-
-  if (missingSkillIds.length === 0) {
-    return meta;
-  }
-
-  const recordsById = new Map<string, SkillRecord[]>();
-
-  records.forEach((record) => {
-    recordsById.set(record.id, [...(recordsById.get(record.id) ?? []), record]);
-  });
-
-  const updatedAt = new Date().toISOString();
-
-  await Promise.all(
-    missingSkillIds.map(async (skillId) => {
-      const skillRecords = recordsById.get(skillId) ?? [];
-      const texts = await Promise.all(skillRecords.map((record) => buildSmartTagText(record)));
-      const generatedTags = unique(
-        texts.flatMap((text, index) => {
-          const record = skillRecords[index];
-
-          if (!record) {
-            return [];
-          }
-
-          return inferSmartTagsFromText(text.length > 0 ? text : inferSmartTags(record).join(" "));
-        }),
-      );
-      const current = nextRecords[skillId] ?? {
-        tags: [],
-        generatedTags: [],
-        preferredSources: [],
-        updatedAt,
-      };
-
-      nextRecords[skillId] = {
-        ...current,
-        generatedTags,
-        updatedAt,
-      };
-    }),
-  );
-
-  await writeSkillMetaState(nextRecords);
-
-  return loadSkillMetaState();
-}
-
 async function fetchJsonWithTimeout<T>(url: string) {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
@@ -1452,13 +1394,11 @@ export async function getDashboardData(): Promise<DashboardData> {
     workspaceSkills,
     nextCatalogSkills,
   );
-  const nextMeta = await ensureGeneratedTags(meta, [...discoverSkills, ...workspaceSkills]);
-
   return {
     generatedAt: new Date().toISOString(),
     config,
     git,
-    meta: nextMeta,
+    meta,
     librarySummaries,
     summary: {
       libraries: config.libraries.length,
@@ -2043,6 +1983,114 @@ async function buildSmartTagText(record: SkillRecord) {
   ].join(" ");
 }
 
+function splitTagTokens(tag: string) {
+  return tag
+    .toLowerCase()
+    .split(/[\s/_-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+}
+
+function expandManualTagKeywords(tag: string) {
+  const normalized = tag.trim().toLowerCase();
+  const keywords = new Set<string>([normalized, ...splitTagTokens(normalized)]);
+  const aliasRules = [
+    {
+      pattern: /(公众号|微信|wechat)/i,
+      values: ["公众号", "微信", "wechat", "wechat article", "wechat articles"],
+    },
+    {
+      pattern: /(配图|插图|封面|cover|image|illustrat|comic|thumbnail)/i,
+      values: ["配图", "插图", "封面", "cover", "image", "illustrat", "comic", "thumbnail"],
+    },
+    {
+      pattern: /(开发|工程|代码|code|dev|plugin|api)/i,
+      values: ["开发", "工程", "code", "plugin", "api", "debug", "review", "agent"],
+    },
+    {
+      pattern: /(研究|搜索|联网|research|search|web)/i,
+      values: ["研究", "搜索", "联网", "research", "search", "web", "browser"],
+    },
+    {
+      pattern: /(写作|文章|write|writing|draft)/i,
+      values: ["写作", "文章", "write", "writing", "draft", "revise"],
+    },
+    {
+      pattern: /(产品|prd|jtbd|persona|journey)/i,
+      values: ["产品", "prd", "jtbd", "persona", "journey", "用户"],
+    },
+    {
+      pattern: /(自动化|workflow|automation|批量)/i,
+      values: ["自动化", "workflow", "automation", "批量", "setup", "install"],
+    },
+  ];
+
+  aliasRules.forEach((rule) => {
+    if (rule.pattern.test(normalized)) {
+      rule.values.forEach((value) => keywords.add(value.toLowerCase()));
+    }
+  });
+
+  return Array.from(keywords);
+}
+
+function scoreManualTagMatch(tag: string, text: string, inferredTags: string[]) {
+  const normalizedTag = tag.trim().toLowerCase();
+
+  if (!normalizedTag) {
+    return 0;
+  }
+
+  const keywords = expandManualTagKeywords(tag);
+  const tokenScore = keywords.reduce((score, keyword) => {
+    if (!text.includes(keyword)) {
+      return score;
+    }
+
+    return score + (keyword.length >= 4 ? 3 : 2);
+  }, 0);
+  const exactScore = text.includes(normalizedTag) ? 6 : 0;
+  const splitTokens = splitTagTokens(tag);
+  const compoundScore =
+    splitTokens.length >= 2 && splitTokens.every((token) => text.includes(token)) ? 4 : 0;
+  const inferredScore = inferredTags.reduce((score, inferredTag) => {
+    const normalizedInferred = inferredTag.toLowerCase();
+
+    if (
+      normalizedTag.includes(normalizedInferred) ||
+      normalizedInferred.includes(normalizedTag) ||
+      keywords.includes(normalizedInferred)
+    ) {
+      return score + 4;
+    }
+
+    return score;
+  }, 0);
+
+  return exactScore + tokenScore + compoundScore + inferredScore;
+}
+
+function matchExistingTagsToText(text: string, tagCatalog: string[]) {
+  const normalizedText = text.toLowerCase();
+  const inferredTags = inferSmartTagsFromText(normalizedText);
+
+  return tagCatalog
+    .map((tag) => ({
+      tag,
+      score: scoreManualTagMatch(tag, normalizedText, inferredTags),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+
+      return left.tag.localeCompare(right.tag);
+    })
+    .map((entry) => entry.tag)
+    .slice(0, 6);
+}
+
 export async function generateSmartTags(skillIds: string[]) {
   const [discoverSkills, workspaceGroups] = await Promise.all([
     scanDiscoverSkills(),
@@ -2058,6 +2106,7 @@ export async function generateSmartTags(skillIds: string[]) {
   const meta = await loadSkillMetaState();
   const nextRecords = { ...meta.records };
   const updatedAt = new Date().toISOString();
+  const manualTagCatalog = meta.tagCatalog;
 
   skillIds.forEach((skillId) => {
     recordsById.set(skillId, recordsById.get(skillId) ?? []);
@@ -2077,7 +2126,14 @@ export async function generateSmartTags(skillIds: string[]) {
             return [];
           }
 
-          return inferSmartTagsFromText(text.length > 0 ? text : inferSmartTags(record).join(" "));
+          const analysisText =
+            text.length > 0 ? text : inferSmartTags(record).join(" ");
+
+          if (manualTagCatalog.length > 0) {
+            return matchExistingTagsToText(analysisText, manualTagCatalog);
+          }
+
+          return inferSmartTagsFromText(analysisText);
         }),
       );
       const current = nextRecords[skillId] ?? {

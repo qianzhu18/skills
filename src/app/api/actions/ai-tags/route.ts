@@ -22,14 +22,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: "标签已生成。",
+      message: "AI 推荐标签已更新。",
       dashboard,
     });
   } catch (error) {
     return NextResponse.json(
       {
         ok: false,
-        message: error instanceof Error ? error.message : "标签生成失败。",
+        message: error instanceof Error ? error.message : "AI 标签匹配失败。",
       },
       { status: 500 },
     );

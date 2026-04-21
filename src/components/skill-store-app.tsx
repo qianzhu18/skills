@@ -113,9 +113,15 @@ function scoreQuery(query: string, fields: string[]) {
 }
 
 function getMetaTags(data: DashboardData, skillId: string) {
+  return data.meta.records[skillId]?.tags ?? [];
+}
+
+function getSuggestedTags(data: DashboardData, skillId: string) {
   const record = data.meta.records[skillId];
 
-  return unique([...(record?.generatedTags ?? []), ...(record?.tags ?? [])]);
+  return unique(
+    (record?.generatedTags ?? []).filter((tag) => !(record?.tags ?? []).includes(tag)),
+  );
 }
 
 function pickHighestRiskTrust(trusts: WorkspaceSkill["trust"][]) {
@@ -382,6 +388,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     text: string;
   } | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState("");
   const [detailsCache, setDetailsCache] = useState<Record<string, SkillDetail>>({});
   const [previewKey, setPreviewKey] = useState<string | null>(null);
   const librarySectionRef = useRef<HTMLElement | null>(null);
@@ -415,13 +422,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
     () => librarySummaries.reduce((total, summary) => total + summary.enabledCount, 0),
     [librarySummaries],
   );
-  const availableTags = useMemo(
-    () =>
-      unique(
-        Object.values(data.meta.records).flatMap((record) => record.generatedTags ?? []),
-      ),
-    [data.meta.records],
-  );
+  const availableTags = useMemo(() => data.meta.tagCatalog, [data.meta.tagCatalog]);
   const installedSkillIdsByLibrary = useMemo(
     () => ({
       claude: new Set(
@@ -738,6 +739,12 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
   const activeDrawerLibraryItem = drawerTarget
     ? allLibraryItems.find((item) => item.id === drawerTarget.skillId) ?? null
     : null;
+  const activeManualTags = activeDetail ? getMetaTags(data, activeDetail.skill.id) : [];
+  const activeSuggestedTags = activeDetail ? getSuggestedTags(data, activeDetail.skill.id) : [];
+
+  useEffect(() => {
+    setTagDraft("");
+  }, [drawerTarget?.skillId]);
 
   useEffect(() => {
     if (!activePreview || !detailCacheKey || detailsCache[detailCacheKey]) {
@@ -882,8 +889,65 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
         skillIds,
       },
       `ai-tags:${skillIds.join(",")}`,
-      "智能标签已生成。",
+      "AI 推荐标签已更新。",
     );
+  }
+
+  async function saveManualTags(skillIds: string[], tags: string[], successText: string) {
+    const normalizedTags = unique(tags.map((tag) => tag.trim()).filter(Boolean));
+
+    await runAction(
+      "/api/actions/skill-meta",
+      {
+        skillIds,
+        tags: normalizedTags,
+      },
+      `manual-tags:${skillIds.join(",")}:${normalizedTags.join(",")}`,
+      successText,
+    );
+  }
+
+  async function addManualTag(skillId: string, tag: string) {
+    const nextTag = tag.trim();
+
+    if (!nextTag) {
+      return;
+    }
+
+    const currentTags = getMetaTags(data, skillId);
+
+    if (currentTags.includes(nextTag)) {
+      setTagDraft("");
+      return;
+    }
+
+    await saveManualTags([skillId], [...currentTags, nextTag], `已添加标签 ${nextTag}。`);
+    setTagDraft("");
+  }
+
+  async function removeManualTag(skillId: string, tag: string) {
+    const currentTags = getMetaTags(data, skillId);
+    const nextTags = currentTags.filter((entry) => entry !== tag);
+
+    await saveManualTags([skillId], nextTags, `已移除标签 ${tag}。`);
+  }
+
+  async function acceptSuggestedTag(skillId: string, tag: string) {
+    const currentTags = getMetaTags(data, skillId);
+
+    if (currentTags.includes(tag)) {
+      return;
+    }
+
+    await saveManualTags([skillId], [...currentTags, tag], `已采纳推荐标签 ${tag}。`);
+  }
+
+  async function submitTagDraft() {
+    if (!activeDetail) {
+      return;
+    }
+
+    await addManualTag(activeDetail.skill.id, tagDraft);
   }
 
   async function batchLibraryAction(action: "uninstall" | "ai-tags") {
@@ -982,7 +1046,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             ) : (
               <Sparkles size={16} />
             )}
-            生成标签
+            AI 匹配标签
           </button>
           <div className="mvp-avatar">
             <UserCircle2 size={22} />
@@ -1065,7 +1129,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
             </div>
             <div className="mvp-tag-cloud">
               {availableTags.length === 0 ? (
-                <p>首次会自动生成一轮标签，后面你再自己整理。</p>
+                <p>先在 skill 详情里创建你的分类标签，再让 AI 去帮你匹配。</p>
               ) : (
                 availableTags.map((tag) => (
                   <button
@@ -1082,7 +1146,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
               )}
             </div>
             <p className="mvp-sidebar-note">
-              标签先自动打一轮，后面按你的管理习惯继续维护，不把来源和风险混进标签里。
+              这里展示的是你的手动标签体系。AI 只会给推荐，不会自动改正式标签。
             </p>
           </section>
         </aside>
@@ -1258,7 +1322,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   批量删除
                 </button>
                 <button type="button" onClick={() => void batchLibraryAction("ai-tags")}>
-                  生成标签
+                  AI 匹配
                 </button>
               </div>
             </div>
@@ -1370,7 +1434,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                               查看
                             </button>
                             <button type="button" onClick={() => void generateTags([item.id])}>
-                              标签
+                              AI 推荐
                             </button>
                             <button
                               type="button"
@@ -1511,14 +1575,79 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                   </div>
                 ) : null}
 
-                <div className="mvp-card-tags drawer">
-                  {getMetaTags(data, activeDetail.skill.id).length > 0 ? (
-                    getMetaTags(data, activeDetail.skill.id).map((tag) => (
-                      <span key={tag}>{tag}</span>
-                    ))
-                  ) : (
-                    <span className="muted">还没有标签</span>
-                  )}
+                <div className="mvp-tag-editor">
+                  <div className="mvp-tag-editor-head">
+                    <div>
+                      <strong>手动标签</strong>
+                      <p>你先定义分类体系，比如 `baoyu`、`公众号`、`配图`、`开发`。</p>
+                    </div>
+                  </div>
+
+                  <div className="mvp-card-tags drawer">
+                    {activeManualTags.length > 0 ? (
+                      activeManualTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="mvp-tag-chip-button"
+                          onClick={() => void removeManualTag(activeDetail.skill.id, tag)}
+                        >
+                          {tag}
+                          <X size={12} />
+                        </button>
+                      ))
+                    ) : (
+                      <span className="muted">还没有手动标签</span>
+                    )}
+                  </div>
+
+                  <div className="mvp-tag-entry">
+                    <input
+                      value={tagDraft}
+                      onChange={(event) => setTagDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void submitTagDraft();
+                        }
+                      }}
+                      placeholder="输入一个新标签，例如 baoyu / 公众号 / 配图 / 开发"
+                    />
+                    <button type="button" onClick={() => void submitTagDraft()}>
+                      添加标签
+                    </button>
+                  </div>
+
+                  <div className="mvp-tag-editor-head ai">
+                    <div>
+                      <strong>AI 推荐</strong>
+                      <p>只会根据你现有的标签体系给推荐，不会自动写入正式标签。</p>
+                    </div>
+                    <button type="button" onClick={() => void generateTags([activeDetail.skill.id])}>
+                      <Sparkles size={14} />
+                      AI 匹配标签
+                    </button>
+                  </div>
+
+                  <div className="mvp-card-tags drawer">
+                    {activeSuggestedTags.length > 0 ? (
+                      activeSuggestedTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="mvp-tag-suggestion-button"
+                          onClick={() => void acceptSuggestedTag(activeDetail.skill.id, tag)}
+                        >
+                          {tag}
+                          <span>采纳</span>
+                        </button>
+                      ))
+                    ) : availableTags.length === 0 ? (
+                      <span className="muted">先创建几个手动标签，再点一次 AI 匹配。</span>
+                    ) : (
+                      <span className="muted">还没有推荐命中的标签，继续手动整理也可以。</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mvp-drawer-actions">
@@ -1543,7 +1672,7 @@ export function SkillStoreApp({ initialData }: SkillStoreAppProps) {
                     onClick={() => void generateTags([activeDetail.skill.id])}
                   >
                     <Sparkles size={14} />
-                    生成标签
+                    刷新推荐
                   </button>
                 </div>
 
